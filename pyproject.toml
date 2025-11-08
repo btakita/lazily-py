@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "become"
+version = "0.1.0"
+description = "A lazy evaluation library for Python with context-aware callable wrappers"
+readme = "README.md"
+license = {file = "LICENSE"}
+authors = [
+    {name = "Your Name", email = "brian.takita@gmail.com"}
+]
+maintainers = [
+    {name = "Your Name", email = "brian.takita@gmail.com"}
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Utilities"
+]
+keywords = ["lazy", "evaluation", "dependency", "injection", "context", "become"]
+requires-python = ">=3.8"
+dependencies = []
+
+[project.urls]
+"Homepage" = "https://github.com/btakita/become-py"
+"Bug Reports" = "https://github.com/btakita/become-py/issues"
+"Source" = "https://github.com/btakita/become-py"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0",
+    "pytest-cov",
+    "black",
+    "flake8",
+    "mypy"
+]
+
+[tool.setuptools.packages.find]
+include = ["become*"]
+exclude = ["tests*"]
+
+[tool.setuptools.package-data]
+become = ["py.typed"]

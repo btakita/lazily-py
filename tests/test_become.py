@@ -1,4 +1,4 @@
-from be import be, be_singleton
+from become import be, be_singleton
 
 
 def be_foo(ctx: dict) -> int:
