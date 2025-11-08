@@ -1,4 +1,5 @@
 import pytest
+
 from become import Be, be, be_class
 
 
@@ -135,6 +136,7 @@ class TestBeSingleton:
 
     def test_simple_singleton(self):
         """Test basic singleton functionality."""
+
         class be_hello(be_class[str]):
             def callable(self, ctx: dict) -> str:
                 return "Hello from singleton"
@@ -145,10 +147,11 @@ class TestBeSingleton:
         assert result == "Hello from singleton"
 
         # Check that it's cached in context
-        assert len([k for k in ctx.keys() if hasattr(k, 'callable')]) == 1
+        assert len([k for k in ctx if hasattr(k, "callable")]) == 1
 
     def test_singleton_behavior(self):
         """Test that multiple calls create the same singleton instance."""
+
         class be_counter(be_class[int]):
             def __init__(self):
                 super().__init__()
@@ -176,6 +179,7 @@ class TestBeSingleton:
 
     def test_singleton_dependency_chain(self):
         """Test singleton objects depending on other singleton objects."""
+
         class be_base(be_class[str]):
             def callable(self, ctx: dict) -> str:
                 return "base"
@@ -191,6 +195,7 @@ class TestBeSingleton:
 
     def test_multiple_singleton_classes(self):
         """Test that different singleton classes are independent."""
+
         class be_foo(be_class[str]):
             def callable(self, ctx: dict) -> str:
                 return "foo"
@@ -208,14 +213,15 @@ class TestBeSingleton:
         assert bar_result == "bar"
 
         # Both should be cached in context
-        assert len([k for k in ctx.keys() if hasattr(k, 'callable')]) == 2
+        assert len([k for k in ctx if hasattr(k, "callable")]) == 2
 
     def test_singleton_with_complex_logic(self):
         """Test singleton with more complex callable logic."""
+
         class be_fibonacci(be_class[int]):
             def callable(self, ctx: dict) -> int:
                 # Simple fibonacci calculation
-                n = ctx.get('fib_n', 10)
+                n = ctx.get("fib_n", 10)
                 if n <= 1:
                     return n
 
@@ -224,13 +230,14 @@ class TestBeSingleton:
                     a, b = b, a + b
                 return b
 
-        ctx = {'fib_n': 7}
+        ctx = {"fib_n": 7}
         result = be_fibonacci(ctx)
 
         assert result == 13  # 7th fibonacci number
 
     def test_singleton_inheritance_error(self):
         """Test that singleton raises NotImplementedError if callable not implemented."""
+
         class be_abstract(be_class[str]):
             pass  # No callable method implemented
 
@@ -263,7 +270,9 @@ class TestIntegration:
 
     def test_complex_dependency_graph(self):
         """Test a complex dependency graph."""
-        be_config = be(lambda ctx: {"api_url": "https://api.example.com", "timeout": 30})
+        be_config = be(
+            lambda ctx: {"api_url": "https://api.example.com", "timeout": 30}
+        )
 
         class be_http_client(be_class[str]):
             def callable(self, ctx: dict) -> str:
@@ -273,7 +282,9 @@ class TestIntegration:
         be_user_service = be(lambda ctx: f"UserService({be_http_client(ctx)})")
         be_auth_service = be(lambda ctx: f"AuthService({be_http_client(ctx)})")
 
-        be_app = be(lambda ctx: f"App(user={be_user_service(ctx)}, auth={be_auth_service(ctx)})")
+        be_app = be(
+            lambda ctx: f"App(user={be_user_service(ctx)}, auth={be_auth_service(ctx)})"
+        )
 
         ctx = {}
         result = be_app(ctx)
@@ -283,15 +294,15 @@ class TestIntegration:
 
     def test_context_isolation(self):
         """Test that different contexts don't interfere with each other."""
-        be_value = be(lambda ctx: ctx.get('input', 'default'))
+        be_value = be(lambda ctx: ctx.get("input", "default"))
 
         class be_multiplier(be_class[int]):
             def callable(self, ctx: dict) -> int:
                 base = be_value(ctx)
                 return len(base) * 2
 
-        ctx1 = {'input': 'hello'}
-        ctx2 = {'input': 'hi'}
+        ctx1 = {"input": "hello"}
+        ctx2 = {"input": "hi"}
         ctx3 = {}
 
         result1 = be_multiplier(ctx1)  # len('hello') * 2 = 10
@@ -318,25 +329,25 @@ class TestEdgeCases:
 
     def test_context_mutation(self):
         """Test that be objects can read from context mutations."""
-        be_reader = be(lambda ctx: ctx.get('dynamic_value', 'not_found'))
+        be_reader = be(lambda ctx: ctx.get("dynamic_value", "not_found"))
 
         ctx = {}
 
         # First call - value not in context
         result1 = be_reader(ctx)
-        assert result1 == 'not_found'
+        assert result1 == "not_found"
 
         # Add value to context
-        ctx['dynamic_value'] = 'found'
+        ctx["dynamic_value"] = "found"
 
         # Create new be that reads the same key
-        be_reader2 = be(lambda ctx: ctx.get('dynamic_value', 'not_found'))
+        be_reader2 = be(lambda ctx: ctx.get("dynamic_value", "not_found"))
         result2 = be_reader2(ctx)
-        assert result2 == 'found'
+        assert result2 == "found"
 
         # Original be_reader should still return cached value
         result3 = be_reader(ctx)
-        assert result3 == 'not_found'  # Cached result
+        assert result3 == "not_found"  # Cached result
 
     def test_none_values(self):
         """Test handling of None values."""

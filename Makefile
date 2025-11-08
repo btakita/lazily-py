@@ -2,7 +2,7 @@
 
 # Install development dependencies and package in editable mode
 install-dev:
-	pip install build twine pytest pytest-cov black flake8 mypy
+	pip install build twine pytest pytest-cov ruff mypy
 	pip install -e .
 
 # Run tests
@@ -13,13 +13,13 @@ test:
 test-cov:
 	pytest tests/ --cov=become --cov-report=html --cov-report=term-missing
 
-# Format code
+# Format code with ruff
 format:
-	black become/ tests/
+	ruff format become/ tests/
 
-# Lint code
+# Lint code with ruff
 lint:
-	flake8 become/ tests/
+	ruff check become/ tests/
 
 # Type check
 type-check:
