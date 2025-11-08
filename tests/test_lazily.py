@@ -1,6 +1,6 @@
 import pytest
 
-from become import Be, be, be_class
+from lazily import Be, be, be_class
 
 
 class TestBe:

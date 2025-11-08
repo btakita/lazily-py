@@ -11,19 +11,19 @@ test:
 
 # Run tests with coverage
 test-cov:
-	pytest tests/ --cov=become --cov-report=html --cov-report=term-missing
+	pytest tests/ --cov=lazily --cov-report=html --cov-report=term-missing
 
 # Format code with ruff
 format:
-	ruff format become/ tests/
+	ruff format lazily/ tests/
 
 # Lint code with ruff
 lint:
-	ruff check become/ tests/
+	ruff check lazily/ tests/
 
 # Type check
 type-check:
-	mypy become/
+	mypy lazily/
 
 # Run all checks
 check: format lint type-check test

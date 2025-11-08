@@ -1,8 +1,8 @@
-# become-py
-Python library for lazy running &amp; caching callables onto a ctx dict
+# lazily
+A Python library for lazy evaluation with context caching.
 
 ## Installation
-pip install become
+pip install lazily
 
 ## Usage
 ```python
@@ -11,7 +11,7 @@ pip install become
 ### Example usage
 
 ```python
-from become import be, be_class
+from lazily import be, be_class
 
 hello = be(lambda ctx: "Hello")
 world = be(lambda ctx: "World")

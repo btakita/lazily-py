@@ -3,9 +3,9 @@ requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "become"
+name = "lazily"
 version = "0.1.0"
-description = "A lazy evaluation library for Python with context-aware callable wrappers"
+description = "A library for lazy evaluation with context caching"
 readme = "README.md"
 license = {file = "LICENSE"}
 authors = [
@@ -27,14 +27,14 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: Utilities"
 ]
-keywords = ["lazy", "evaluation", "dependency", "injection", "context", "become"]
+keywords = ["lazy", "evaluation", "dependency", "injection", "context", "lazily"]
 requires-python = ">=3.8"
 dependencies = []
 
 [project.urls]
-"Homepage" = "https://github.com/btakita/become-py"
-"Bug Reports" = "https://github.com/btakita/become-py/issues"
-"Source" = "https://github.com/btakita/become-py"
+"Homepage" = "https://github.com/btakita/lazily-py"
+"Bug Reports" = "https://github.com/btakita/lazily-py/issues"
+"Source" = "https://github.com/btakita/lazily-py"
 
 [project.optional-dependencies]
 dev = [
@@ -45,11 +45,11 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["become*"]
+include = ["lazily*"]
 exclude = ["tests*"]
 
 [tool.setuptools.package-data]
-become = ["py.typed"]
+lazily = ["py.typed"]
 
 [tool.ruff]
 # Target Python 3.8+
@@ -133,7 +133,7 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 
 [tool.ruff.lint.isort]
 # Configure import sorting to match your preferences
-known-first-party = ["become"]
+known-first-party = ["lazily"]
 force-single-line = false
 lines-after-imports = 2
 
