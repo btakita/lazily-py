@@ -371,3 +371,17 @@ class TestEdgeCases:
 
         # Should not be cached after exception
         assert not be_error.is_in(ctx)
+
+    def test_get_and_is_in_with_be_class(self):
+        """Test get and is_in methods with be_class."""
+        class be_hello(be_class[str]):
+            def callable(self, ctx: dict) -> str:
+                return "Hello"
+
+        ctx = {}
+        assert be_hello.get(ctx) is None
+        assert not be_hello.is_in(ctx)
+
+        assert be_hello(ctx) == "Hello"
+        assert be_hello.get(ctx) == "Hello"
+        assert be_hello.is_in(ctx)

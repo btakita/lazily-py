@@ -56,15 +56,20 @@ class Meta_be_class(type):
 
     def __call__(cls, ctx: dict) -> Any:
         """Allow calling the class directly with ctx: be_foo(ctx)"""
+        # Call the singleton instance with the context
+        return cls.instance(ctx)
+
+    @property
+    def instance(cls) -> Any:
         if cls._instances is None:
             cls._instances = {}
+
         if cls not in cls._instances:
             # Create the singleton instance
-            instance = super().__call__()
+            instance = type.__call__(cls)
             cls._instances[cls] = instance
 
-        # Call the singleton instance with the context
-        return cls._instances[cls](ctx)
+        return cls._instances[cls]
 
 
 class be_class(Be[T], metaclass=Meta_be_class):
@@ -100,3 +105,13 @@ class be_class(Be[T], metaclass=Meta_be_class):
 
     def callable(self, ctx: dict) -> T:
         raise NotImplementedError
+
+    @classmethod
+    def get(cls, ctx: dict) -> Optional[T]:
+        """Allow calling get directly on the class"""
+        return Be.get(cls.instance, ctx)
+
+    @classmethod
+    def is_in(cls, ctx: dict) -> bool:
+        """Allow calling is_in directly on the class"""
+        return Be.is_in(cls.instance, ctx)
