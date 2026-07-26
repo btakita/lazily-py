@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, TypeVar
 
+from ._keyed_order import KeyedOrder, MapMove
 from .async_slot import AsyncSlot
 from .cell import Cell
 from .collection import EntryKind, _reads
@@ -63,12 +64,26 @@ class AsyncReactiveMap[K, V]:
     #: The entry kind — set by the specialization.
     _KIND: EntryKind = EntryKind.SOURCE
 
-    __slots__ = ("_ctx", "_materialized", "_order")
+    __slots__ = (
+        "_ctx",
+        "_keyed",
+        "_membership_signal",
+        "_order_signal",
+        "_order_version",
+        "_version",
+    )
 
     def __init__(self, ctx: dict) -> None:
         self._ctx = ctx
-        self._materialized: dict[K, AsyncMapHandle] = {}
-        self._order: list[K] = []
+        # Present set + key order + the move algebra, shared with the other two
+        # flavors. Graph-agnostic; the reactivity below is this flavor's own.
+        self._keyed: KeyedOrder[K, AsyncMapHandle] = KeyedOrder()
+        # Membership and order signals minted on THIS flavor's graph. A shared
+        # graph-agnostic core cannot supply reactivity.
+        self._membership_signal: Cell[int] = Cell(ctx, 0)
+        self._order_signal: Cell[int] = Cell(ctx, 0)
+        self._version = 0
+        self._order_version = 0
 
     @classmethod
     def new(cls, ctx: dict) -> AsyncReactiveMap[K, V]:
@@ -78,7 +93,7 @@ class AsyncReactiveMap[K, V]:
     # -- internals ------------------------------------------------------ #
 
     def _mint(self, key: K, factory: Callable[[Any, K], V]) -> AsyncMapHandle:
-        existing = self._materialized.get(key)
+        existing = self._keyed.get(key)
         if existing is not None:
             return existing  # warm: already allocated (stable handle).
         # ``factory(view, key)`` takes a compute view first (``#lzcellkernel``).
@@ -96,8 +111,10 @@ class AsyncReactiveMap[K, V]:
                 return factory(view, k)
 
             handle = AsyncSlot(_compute)
-        self._materialized[key] = handle
-        self._order.append(key)
+        stored, mutation = self._keyed.insert(key, handle)
+        if mutation.changed:
+            self._bump_membership()
+        handle = stored
         return handle
 
     # -- reads / writes ------------------------------------------------- #
@@ -115,7 +132,7 @@ class AsyncReactiveMap[K, V]:
         or ``None`` for a slot still pending (or an absent key). The
         **eventual**-transparency law: once resolved this equals the canonical
         value. Non-minting."""
-        handle = self._materialized.get(key)
+        handle = self._keyed.get(key)
         if handle is None:
             return None
         if self._KIND is EntryKind.SOURCE:
@@ -133,19 +150,107 @@ class AsyncReactiveMap[K, V]:
 
     def handle(self, key: K) -> AsyncMapHandle | None:
         """Return the existing entry handle for ``key``, or ``None``. Non-minting."""
-        return self._materialized.get(key)
+        return self._keyed.get(key)
 
     def is_present(self, key: K) -> bool:
         """Whether ``key`` is currently materialized (present). Non-reactive."""
-        return key in self._materialized
+        return self._keyed.contains(key)
 
     def present_keys(self) -> list[K]:
         """The currently-materialized keys, in first-materialization order."""
-        return list(self._order)
+        return self._keyed.keys()
 
     def present_count(self) -> int:
         """Number of currently-materialized entries."""
-        return len(self._order)
+        return self._keyed.length()
+
+    # -- Core surface: ordering, atomic move, reactive membership -------- #
+    #
+    # Ordering is not async-coloured: the move algebra touches no entry handle
+    # and awaits nothing, so the async map carries the same Core surface as the
+    # other two flavors.
+
+    def keys(self, ctx: Any = None) -> list[K]:
+        """Reactive snapshot of the keys in their current order. Subscribes the
+        caller to **order** changes (add/remove **and** move/reorder), not to
+        per-entry value changes."""
+        if ctx is None:
+            _ = self._order_signal.value
+        else:
+            ctx.read(self._order_signal)
+        return self._keyed.keys()
+
+    def len(self, ctx: Any = None) -> int:
+        """Reactive entry count. Subscribes the caller to membership changes."""
+        if ctx is None:
+            _ = self._membership_signal.value
+        else:
+            ctx.read(self._membership_signal)
+        return self._keyed.length()
+
+    def is_empty(self, ctx: Any = None) -> bool:
+        """Reactive emptiness check."""
+        return self.len(ctx) == 0
+
+    def contains_key(self, key: K, ctx: Any = None) -> bool:
+        """Reactive membership test for ``key``."""
+        if ctx is None:
+            _ = self._membership_signal.value
+        else:
+            ctx.read(self._membership_signal)
+        return self._keyed.contains(key)
+
+    def len_untracked(self) -> int:
+        """Non-reactive count."""
+        return self._keyed.length()
+
+    def position(self, key: K) -> int | None:
+        """Current 0-based position of ``key`` in the order. Non-reactive."""
+        return self._keyed.position(key)
+
+    def move_to(self, key: K, index: int) -> bool:
+        """Atomically move ``key`` to ``index`` (``#lzcellmove``). The entry keeps
+        the **same** handle, dependents, and lineage. Bumps only the order
+        signal, so ``keys`` readers recompute while ``len`` readers stay cached."""
+        return self._apply_move(self._keyed.move_to(key, index))
+
+    def move_before(self, key: K, anchor: K) -> bool:
+        """Atomically move ``key`` to just before ``anchor`` (a pure reorder)."""
+        return self._apply_move(self._keyed.move_before(key, anchor))
+
+    def move_after(self, key: K, anchor: K) -> bool:
+        """Atomically move ``key`` to just after ``anchor`` (a pure reorder)."""
+        return self._apply_move(self._keyed.move_after(key, anchor))
+
+    def remove(self, key: K) -> bool:
+        """Remove ``key``'s entry and bump reactive membership. Returns whether
+        the key was present.
+
+        Matches the other two flavors: the orphaned node is dropped, not torn
+        down, because this binding's handle kinds expose no disposal hook."""
+        _, mutation = self._keyed.remove(key)
+        if not mutation.changed:
+            return False
+        self._bump_membership()
+        return True
+
+    # -- signal plumbing -------------------------------------------------- #
+
+    def _bump_order(self) -> None:
+        self._order_version += 1
+        self._order_signal.set(self._order_version)
+
+    def _bump_membership(self) -> None:
+        self._version += 1
+        self._membership_signal.set(self._version)
+        self._bump_order()
+
+    def _apply_move(self, outcome: MapMove) -> bool:
+        if not outcome.applied:
+            return False
+        if outcome.changed:
+            self._bump_order()
+        return True
 
     @property
     def entry_kind(self) -> EntryKind:
@@ -165,7 +270,7 @@ class AsyncSourceMap[K, V](AsyncReactiveMap[K, V]):
     def set(self, key: K, value: V) -> None:
         """Set the value at ``key``, inserting a new input cell if absent.
         Cell-only."""
-        handle = self._materialized.get(key)
+        handle = self._keyed.get(key)
         if handle is not None:
             handle.set(value)  # type: ignore[union-attr]
             return

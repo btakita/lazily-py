@@ -45,8 +45,9 @@ from __future__ import annotations
 import warnings
 from abc import ABC, abstractmethod
 from enum import Enum, EnumMeta
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
+from ._keyed_order import KeyedOrder, MapMove
 from .cell import Cell
 from .slot import Slot
 
@@ -219,9 +220,8 @@ class ReactiveMap[K, V]:
     _HANDLE: _HandleKind = _SOURCE_HANDLE
 
     __slots__ = (
-        "_entries",
+        "_keyed",
         "_membership_signal",
-        "_order",
         "_order_signal",
         "_order_version",
         "_version",
@@ -230,8 +230,9 @@ class ReactiveMap[K, V]:
 
     def __init__(self, ctx: dict) -> None:
         self.ctx = ctx
-        self._entries: dict[K, MapHandle] = {}
-        self._order: list[K] = []
+        # Present set + key order + the move algebra. Graph-agnostic and shared
+        # with the thread-safe and async flavors; see ``_keyed_order.py``.
+        self._keyed: KeyedOrder[K, MapHandle] = KeyedOrder()
         # Reactive membership (add/remove) and order (add/remove + move) signals.
         self._membership_signal: Cell[int] = Cell(ctx, 0)
         self._order_signal: Cell[int] = Cell(ctx, 0)
@@ -256,7 +257,7 @@ class ReactiveMap[K, V]:
     @property
     def order(self) -> list[K]:
         """The authoritative insertion-ordered key list (non-reactive)."""
-        return list(self._order)
+        return self._keyed.keys()
 
     @property
     def entry_kind(self) -> EntryKind:
@@ -281,14 +282,15 @@ class ReactiveMap[K, V]:
         """Mint the entry node for ``key`` on first access, caching the handle
         and bumping reactive membership. Re-minting an existing key returns the
         cached handle. ``compute(view)`` takes the member's compute view."""
-        handle = self._entries.get(key)
-        if handle is not None:
-            return handle  # warm: already allocated.
-        handle = self._HANDLE.materialize(self.ctx, compute)
-        self._entries[key] = handle
-        self._order.append(key)
-        self._bump_membership()
-        return handle
+        warm = self._keyed.get(key)
+        if warm is not None:
+            return warm  # warm: already allocated.
+        stored, mutation = self._keyed.insert(
+            key, self._HANDLE.materialize(self.ctx, compute)
+        )
+        if mutation.changed:
+            self._bump_membership()
+        return stored
 
     # -- reads / mint-on-access ----------------------------------------- #
 
@@ -306,7 +308,7 @@ class ReactiveMap[K, V]:
         Pass the caller's compute ``ctx`` to value-thread the *read* of the entry
         too; omit it for an untracked top-level read (``#lzcellkernel``)."""
         read_ctx = self.ctx if ctx is None else ctx
-        handle = self._entries.get(key)
+        handle = self._keyed.get(key)
         if handle is not None:
             return self._HANDLE.observe(read_ctx, handle)
         handle = self._mint_with(key, lambda view: factory(view, key))
@@ -315,7 +317,7 @@ class ReactiveMap[K, V]:
     def handle(self, key: K) -> MapHandle | None:
         """Return the existing entry handle for ``key``, or ``None``.
         Non-reactive: does not subscribe the caller to membership."""
-        return self._entries.get(key)
+        return self._keyed.get(key)
 
     #: Alias for :meth:`handle` (the entry's value node).
     value_cell = handle
@@ -329,7 +331,7 @@ class ReactiveMap[K, V]:
         inside a reactive body; omit it for an untracked top-level read
         (``#lzcellkernel`` bare-read removal)."""
         read_ctx = self.ctx if ctx is None else ctx
-        handle = self._entries.get(key)
+        handle = self._keyed.get(key)
         if handle is None:
             return None
         return self._HANDLE.observe(read_ctx, handle)
@@ -337,11 +339,19 @@ class ReactiveMap[K, V]:
     def remove(self, key: K) -> bool:
         """Remove ``key``'s entry. Bumps reactive membership. Returns whether the
         key was present. (No-op if ``key`` is not a member.)"""
-        if key not in self._entries:
+        _, mutation = self._keyed.remove(key)
+        if not mutation.changed:
             return False
-        del self._entries[key]
-        self._order = [k for k in self._order if k != key]
         self._bump_membership()
+        return True
+
+    def _apply_move(self, outcome: MapMove) -> bool:
+        """Bump the order signal only when the order actually changed. A no-op
+        move still reports success but must invalidate no reader."""
+        if not outcome.applied:
+            return False
+        if outcome.changed:
+            self._bump_order()
         return True
 
     # -- membership / order reads --------------------------------------- #
@@ -358,35 +368,32 @@ class ReactiveMap[K, V]:
             _ = self._order_signal.value
         else:
             ctx.read(self._order_signal)
-        return list(self._order)
+        return self._keyed.keys()
 
     def present_keys(self) -> list[K]:
         """The currently-materialized (present) keys, in first-materialization
         order. Non-reactive; the present set only grows (deferral, not
         de-allocation)."""
-        return list(self._order)
+        return self._keyed.keys()
 
     def present_count(self) -> int:
         """Number of currently-materialized (present) entries. Non-reactive."""
-        return len(self._order)
+        return self._keyed.length()
 
     def is_present(self, key: K) -> bool:
         """Whether ``key`` is currently materialized (present). Non-reactive."""
-        return key in self._entries
+        return self._keyed.contains(key)
 
     def position(self, key: K) -> int | None:
         """Current 0-based position of ``key`` in the order, or ``None`` if
         absent. Non-reactive."""
-        try:
-            return self._order.index(key)
-        except ValueError:
-            return None
+        return self._keyed.position(key)
 
     def __len__(self) -> int:
         # Touch membership so a len() reader is invalidated on add/remove but NOT
         # on a pure reorder (move_to).
         _ = self._membership_signal.value
-        return len(self._order)
+        return self._keyed.length()
 
     def len(self, ctx: Any = None) -> int:
         """Reactive entry count. Subscribes the caller to membership changes.
@@ -395,7 +402,7 @@ class ReactiveMap[K, V]:
         if ctx is None:
             return len(self)
         ctx.read(self._membership_signal)
-        return len(self._order)
+        return self._keyed.length()
 
     def is_empty(self, ctx: Any = None) -> bool:
         """Reactive emptiness check. Subscribes the caller to membership changes.
@@ -403,8 +410,10 @@ class ReactiveMap[K, V]:
         return self.len(ctx) == 0
 
     def __contains__(self, key: object) -> bool:
+        # `in` is typed `object` by the protocol, but the core is keyed by K;
+        # a non-K key simply is not a member.
         _ = self._membership_signal.value
-        return key in self._entries
+        return self._keyed.contains(cast("K", key))
 
     def contains_key(self, key: K, ctx: Any = None) -> bool:
         """Reactive membership test for ``key``. Subscribes the caller to
@@ -414,11 +423,11 @@ class ReactiveMap[K, V]:
         if ctx is None:
             return key in self
         ctx.read(self._membership_signal)
-        return key in self._entries
+        return self._keyed.contains(key)
 
     def len_untracked(self) -> int:
         """Non-reactive count. Does not subscribe the caller to anything."""
-        return len(self._order)
+        return self._keyed.length()
 
     # -- atomic ordered move (#lzcellmove) ------------------------------ #
 
@@ -428,36 +437,17 @@ class ReactiveMap[K, V]:
         re-mint). Bumps **only** the order signal, so ``keys`` readers recompute
         but ``len``/``contains`` readers stay cached. ``index`` is clamped to
         ``[0, len)``. Returns whether ``key`` was present."""
-        if key not in self._entries:
-            return False
-        from_pos = self._order.index(key)
-        to = min(index, len(self._order) - 1)
-        if from_pos == to:
-            return True  # no-op: do not invalidate readers needlessly.
-        self._order.pop(from_pos)
-        self._order.insert(to, key)
-        self._bump_order()
-        return True
+        return self._apply_move(self._keyed.move_to(key, index))
 
     def move_before(self, key: K, anchor: K) -> bool:
         """Atomically move ``key`` to just before ``anchor`` (a pure reorder).
         No-op returning ``False`` if either key is absent."""
-        if anchor not in self._entries or key not in self._entries:
-            return False
-        anchor_idx = self._order.index(anchor)
-        from_pos = self._order.index(key)
-        target = anchor_idx - 1 if from_pos < anchor_idx else anchor_idx
-        return self.move_to(key, target)
+        return self._apply_move(self._keyed.move_before(key, anchor))
 
     def move_after(self, key: K, anchor: K) -> bool:
         """Atomically move ``key`` to just after ``anchor`` (a pure reorder).
         No-op returning ``False`` if either key is absent."""
-        if anchor not in self._entries or key not in self._entries:
-            return False
-        anchor_idx = self._order.index(anchor)
-        from_pos = self._order.index(key)
-        target = anchor_idx if from_pos <= anchor_idx else anchor_idx + 1
-        return self.move_to(key, target)
+        return self._apply_move(self._keyed.move_after(key, anchor))
 
 
 class SourceMap[K, V](ReactiveMap[K, V]):
@@ -478,7 +468,7 @@ class SourceMap[K, V](ReactiveMap[K, V]):
         lazily) on first access. Subsequent calls return the cached handle.
         Adding a new key bumps reactive membership; re-fetching an existing key
         does not. Cell-only: eager value-minting has no derived-slot analog."""
-        handle = self._entries.get(key)
+        handle = self._keyed.get(key)
         if handle is not None:
             return handle  # type: ignore[return-value]
         # ``default`` is the 0-arg value-mint factory (an input seed needs no
@@ -495,7 +485,7 @@ class SourceMap[K, V](ReactiveMap[K, V]):
         membership) if it does not exist yet. Updating an existing entry leaves
         membership untouched and invalidates only that entry's dependents.
         Cell-only: an input is settable; a derived :class:`ComputedMap` slot is not."""
-        handle = self._entries.get(key)
+        handle = self._keyed.get(key)
         if handle is not None:
             handle.set(value)  # type: ignore[union-attr]
             return

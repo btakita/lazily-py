@@ -26,6 +26,8 @@ from __future__ import annotations
 import threading
 from typing import TYPE_CHECKING, Any, TypeVar
 
+from ._keyed_order import KeyedOrder, MapMove
+from .cell import Cell
 from .collection import (
     _COMPUTED_HANDLE,
     _SOURCE_HANDLE,
@@ -67,16 +69,35 @@ class ThreadSafeReactiveMap[K, V]:
     #: The entry handle kind — set by the specialization.
     _HANDLE: _HandleKind = _SOURCE_HANDLE
 
-    __slots__ = ("_ctx", "_materialized", "_mutex", "_order", "_ts")
+    __slots__ = (
+        "_ctx",
+        "_keyed",
+        "_membership_signal",
+        "_mutex",
+        "_order_signal",
+        "_order_version",
+        "_ts",
+        "_version",
+    )
 
     def __init__(self, ctx: dict, *, ts: ThreadSafeContext | None = None) -> None:
         self._ctx = ctx
         self._ts = ts if ts is not None else ThreadSafeContext()
-        self._materialized: dict[K, MapHandle] = {}
-        self._order: list[K] = []
+        # Present set + key order + the move algebra, shared with the other two
+        # flavors. Graph-agnostic; the reactivity below is this flavor's own.
+        self._keyed: KeyedOrder[K, MapHandle] = KeyedOrder()
         # A dedicated present-set lock, separate from the context's write lock, so
         # a slot recompute triggered while committing cannot re-enter it.
         self._mutex = threading.RLock()
+        # Membership and order signals minted on THIS flavor's graph. A shared
+        # graph-agnostic core cannot supply reactivity.
+        self._membership_signal: Cell[int] = Cell(ctx, 0)
+        self._order_signal: Cell[int] = Cell(ctx, 0)
+        # Untracked mirrors, so a mutator bumps the reactive cell without reading
+        # its ``.value`` (which would register a spurious dependency when a mint
+        # happens inside a running computation).
+        self._version = 0
+        self._order_version = 0
 
     # -- constructors --------------------------------------------------- #
 
@@ -92,7 +113,7 @@ class ThreadSafeReactiveMap[K, V]:
     def _mint_with(self, key: K, compute: Callable[[Any], V]) -> MapHandle:
         # Fast path under the present-set lock: return the warm entry if present.
         with self._mutex:
-            warm = self._materialized.get(key)
+            warm = self._keyed.get(key)
         if warm is not None:
             return warm
         # Build the node OUTSIDE the lock so a slot recompute cannot re-enter it.
@@ -100,12 +121,12 @@ class ThreadSafeReactiveMap[K, V]:
         # First-writer-wins commit: on a lost race the freshly-built node is
         # orphaned (unreferenced) and the key keeps its single stable handle.
         with self._mutex:
-            existing = self._materialized.get(key)
-            if existing is not None:
-                return existing
-            self._materialized[key] = handle
-            self._order.append(key)
-            return handle
+            stored, mutation = self._keyed.insert(key, handle)
+        # Bump off the lock: a set can drive a dependent recompute that re-enters
+        # this map.
+        if mutation.changed:
+            self._bump_membership()
+        return stored
 
     # -- reads / writes ------------------------------------------------- #
 
@@ -133,8 +154,7 @@ class ThreadSafeReactiveMap[K, V]:
         on access. Pass the caller's compute ``ctx`` to value-thread the
         dependency edge inside a reactive body; omit for an untracked top-level
         read (``#lzcellkernel``)."""
-        with self._mutex:
-            handle = self._materialized.get(key)
+        handle = self.handle(key)
         if handle is None:
             return None
         return self._HANDLE.observe(self._ctx if ctx is None else ctx, handle)
@@ -142,22 +162,128 @@ class ThreadSafeReactiveMap[K, V]:
     def handle(self, key: K) -> MapHandle | None:
         """Return the existing entry handle for ``key``, or ``None``. Non-minting."""
         with self._mutex:
-            return self._materialized.get(key)
+            return self._keyed.get(key)
 
     def is_present(self, key: K) -> bool:
         """Whether ``key`` is currently materialized. Non-reactive."""
         with self._mutex:
-            return key in self._materialized
+            return self._keyed.contains(key)
 
     def present_keys(self) -> list[K]:
         """The currently-materialized keys, in first-materialization order."""
         with self._mutex:
-            return list(self._order)
+            return self._keyed.keys()
 
     def present_count(self) -> int:
         """Number of currently-materialized entries."""
         with self._mutex:
-            return len(self._order)
+            return self._keyed.length()
+
+    # -- Core surface: ordering, atomic move, reactive membership -------- #
+    #
+    # These bind every flavor. The move algebra touches no entry handle and
+    # awaits nothing, so it is neither thread- nor async-coloured; the
+    # membership and order signals are minted on this flavor's own graph.
+
+    def keys(self, ctx: Any = None) -> list[K]:
+        """Reactive snapshot of the keys in their current order. Subscribes the
+        caller to **order** changes (add/remove **and** move/reorder), not to
+        per-entry value changes. Pass the caller's compute view to value-thread
+        the edge; omit for an untracked snapshot."""
+        if ctx is None:
+            _ = self._order_signal.value
+        else:
+            ctx.read(self._order_signal)
+        return self.present_keys()
+
+    def len(self, ctx: Any = None) -> int:
+        """Reactive entry count. Subscribes the caller to membership changes."""
+        if ctx is None:
+            _ = self._membership_signal.value
+        else:
+            ctx.read(self._membership_signal)
+        return self.present_count()
+
+    def is_empty(self, ctx: Any = None) -> bool:
+        """Reactive emptiness check."""
+        return self.len(ctx) == 0
+
+    def contains_key(self, key: K, ctx: Any = None) -> bool:
+        """Reactive membership test for ``key``. Subscribes the caller to
+        membership changes (add/remove of any key), not to value changes."""
+        if ctx is None:
+            _ = self._membership_signal.value
+        else:
+            ctx.read(self._membership_signal)
+        return self.is_present(key)
+
+    def len_untracked(self) -> int:
+        """Non-reactive count."""
+        return self.present_count()
+
+    def position(self, key: K) -> int | None:
+        """Current 0-based position of ``key`` in the order. Non-reactive."""
+        with self._mutex:
+            return self._keyed.position(key)
+
+    def move_to(self, key: K, index: int) -> bool:
+        """Atomically move ``key`` to ``index`` (``#lzcellmove``). The entry keeps
+        the **same** handle, dependents, and lineage — that is what separates a
+        reorder from a remove + re-mint. Bumps **only** the order signal."""
+        with self._mutex:
+            outcome = self._keyed.move_to(key, index)
+        return self._apply_move(outcome)
+
+    def move_before(self, key: K, anchor: K) -> bool:
+        """Atomically move ``key`` to just before ``anchor`` (a pure reorder)."""
+        with self._mutex:
+            outcome = self._keyed.move_before(key, anchor)
+        return self._apply_move(outcome)
+
+    def move_after(self, key: K, anchor: K) -> bool:
+        """Atomically move ``key`` to just after ``anchor`` (a pure reorder)."""
+        with self._mutex:
+            outcome = self._keyed.move_after(key, anchor)
+        return self._apply_move(outcome)
+
+    def remove(self, key: K) -> bool:
+        """Remove ``key``'s entry and bump reactive membership. Returns whether
+        the key was present.
+
+        Matches the single-threaded map: the orphaned node is dropped, not torn
+        down, because this binding's handle kinds expose no disposal hook. That
+        gap is the same on all three flavors and is tracked separately — it is
+        not something this flavor should solve alone and differently."""
+        with self._mutex:
+            _, mutation = self._keyed.remove(key)
+        if not mutation.changed:
+            return False
+        # Off the present-set lock: the membership bump can drive a dependent
+        # recompute that re-enters this map.
+        self._bump_membership()
+        return True
+
+    # -- signal plumbing -------------------------------------------------- #
+
+    def _bump_order(self) -> None:
+        with self._mutex:
+            self._order_version += 1
+            nxt = self._order_version
+        self._ts.set(self._order_signal, nxt)
+
+    def _bump_membership(self) -> None:
+        with self._mutex:
+            self._version += 1
+            nxt = self._version
+        self._ts.set(self._membership_signal, nxt)
+        self._bump_order()
+
+    def _apply_move(self, outcome: MapMove) -> bool:
+        if not outcome.applied:
+            return False
+        if outcome.changed:
+            self._bump_order()
+        return True
 
     @property
     def context(self) -> ThreadSafeContext:
@@ -182,8 +308,7 @@ class ThreadSafeSourceMap[K, V](ThreadSafeReactiveMap[K, V]):
     def set(self, key: K, value: V) -> None:
         """Set the value at ``key`` through the coalescing context, inserting a
         new input cell if absent. Cell-only."""
-        with self._mutex:
-            handle = self._materialized.get(key)
+        handle = self.handle(key)
         if handle is not None:
             self._ts.set(handle, value)  # type: ignore[arg-type]
             return
