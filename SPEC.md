@@ -360,7 +360,7 @@ Beyond the wire protocol, lazily-py implements the `lazily-spec` compute-layer
 `MUST`s, each ported from its Lean formal model in `lazily-formal` and covered
 by property tests that mirror the named Lean theorems.
 
-### Keyed reactive collections (`ReactiveMap` / `SourceMap` / `ComputedMap` / `CellTree`)
+### Keyed reactive collections (`ReactiveMap` / `SourceMap` / `ComputedMap` / `SourceTree`)
 
 One generic keyed primitive `ReactiveMap` over a handle kind (`#reactivemap`),
 with two specializations: `SourceMap` (input-cell entries — adds cell-only `set`
@@ -373,13 +373,13 @@ Three independent reactive signals: per-entry value, set-membership, and order.
 A pure reorder (`move_to`) bumps the order signal only — `len`/`contains` readers
 are not invalidated; an atomic move keeps each entry's handle identity (not remove
 + re-mint). A key resolves to a stable handle across requests (identity
-stability). `CellTree` extends the model to an ordered keyed tree with per-node
+stability). `SourceTree` extends the model to an ordered keyed tree with per-node
 value and per-level membership/order reactivity.
 
 - `ReactiveMap.get_or_insert_with` / `.remove` / `.move_to` / `.move_before` /
   `.move_after`; `membership_signal` / `order_signal`; `SourceMap.entry` / `.set`;
   `ComputedMap.materialize_all`.
-- `CellTree.set_node_value` / `.insert_child` / `.move_child`.
+- `SourceTree.set_node_value` / `.insert_child` / `.move_child`.
 
 ### Keyed reconciliation (`reconcile_ops`)
 

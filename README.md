@@ -75,7 +75,7 @@ notes and platform carve-outs lives in
 | Async reactive context | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Flat state machine | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Harel state charts | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Keyed reactive maps (`ReactiveMap`: `SourceMap` / `ComputedMap`) + `CellTree` + reconcile | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Keyed reactive maps (`ReactiveMap`: `SourceMap` / `ComputedMap`) + `SourceTree` + reconcile | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Memoized semantic tree (`SemTree`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Stable-id alignment (manufactured identity) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Reactive queue (`QueueCell` SPSC/MPSC + `QueueStorage` adapter) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
@@ -278,7 +278,7 @@ self-transition to an equal state is accepted but suppressed by the Cell's
 lazily-py also implements the `lazily-spec` compute-layer `MUST`s, each ported
 from its Lean formal model in [`lazily-formal`](https://github.com/lazily-hub/lazily-formal):
 
-- **`ReactiveMap` / `SourceMap` / `ComputedMap` / `CellTree`** — keyed reactive
+- **`ReactiveMap` / `SourceMap` / `ComputedMap` / `SourceTree`** — keyed reactive
   collections (`#reactivemap`) with independent value/membership/order signals and
   atomic move. One generic `ReactiveMap` over a handle kind; `SourceMap` (input
   cells, adds `set` + eager `entry`) and `ComputedMap` (derived slots, lazy

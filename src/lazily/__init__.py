@@ -257,6 +257,7 @@ __all__ = [
     "Source",
     "SourceMap",
     "SourceSlot",
+    "SourceTree",
     "SpillMode",
     "SpillPage",
     "SpillStore",
@@ -754,7 +755,7 @@ from .transport import (
     spill_state,
     spill_value,
 )
-from .tree import CellTree, TreeNode
+from .tree import SourceTree, TreeNode
 from .types import LazilyCallable
 from .windowing import (
     SessionCell,
@@ -780,21 +781,22 @@ from .work_queue import (
 # Deprecated aliases (v2 kernel rename)
 # ---------------------------------------------------------------------------
 # The v2 kernel renamed the node kinds to ``Source`` and ``Computed``; the keyed
-# map types still said ``Cell`` / ``Slot``, a vocabulary the kernel no longer
-# uses. ``SourceMap`` / ``ComputedMap`` (and the ThreadSafe / Async variants) now
-# say which kind of entry they hold.
+# collection types still said ``Cell`` / ``Slot``, a vocabulary the kernel no
+# longer uses. ``SourceMap`` / ``ComputedMap`` (and the ThreadSafe / Async
+# variants) and ``SourceTree`` now say which kind of entry they hold.
 #
 # A rename is not a removal: every old name stays importable. Reaching for one
 # through the package root emits a :class:`DeprecationWarning` naming the
 # replacement; the ``lazily.collection`` /
-# ``lazily.thread_safe_reactive_family`` / ``lazily.async_reactive_family``
-# submodules expose the same aliases without a warning.
+# ``lazily.thread_safe_reactive_family`` / ``lazily.async_reactive_family`` /
+# ``lazily.tree`` submodules expose the same aliases without a warning.
 
-#: Deprecated map spelling -> its current name.
+#: Deprecated keyed-collection spelling -> its current name.
 _DEPRECATED_ALIASES = {
     "AsyncCellMap": "AsyncSourceMap",
     "AsyncSlotMap": "AsyncComputedMap",
     "CellMap": "SourceMap",
+    "CellTree": "SourceTree",
     "SlotMap": "ComputedMap",
     "ThreadSafeCellMap": "ThreadSafeSourceMap",
     "ThreadSafeSlotMap": "ThreadSafeComputedMap",
@@ -806,20 +808,21 @@ if TYPE_CHECKING:
     AsyncCellMap = AsyncSourceMap
     AsyncSlotMap = AsyncComputedMap
     CellMap = SourceMap
+    CellTree = SourceTree
     SlotMap = ComputedMap
     ThreadSafeCellMap = ThreadSafeSourceMap
     ThreadSafeSlotMap = ThreadSafeComputedMap
 
 
 def __getattr__(name: str) -> Any:
-    """Serve the deprecated keyed-map names, warning once per access site."""
+    """Serve the deprecated keyed-collection names, warning once per access site."""
     current = _DEPRECATED_ALIASES.get(name)
     if current is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     warnings.warn(
         f"lazily.{name} is deprecated; use lazily.{current} instead. "
         "The v2 kernel renamed the node kinds to Source and Computed, so the "
-        "keyed maps are SourceMap / ComputedMap.",
+        "keyed collections are SourceMap / ComputedMap / SourceTree.",
         DeprecationWarning,
         stacklevel=2,
     )

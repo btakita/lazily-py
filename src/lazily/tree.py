@@ -1,4 +1,4 @@
-"""Ordered keyed reactive tree — ``CellTree``.
+"""Ordered keyed reactive tree — ``SourceTree``.
 
 The Python counterpart of the Lean ``LazilyFormal.Tree`` formal model in
 ``lazily-formal`` and ``lazily-spec/cell-model.md`` § "Ordered keyed tree".
@@ -22,7 +22,7 @@ node-by-node.
 from __future__ import annotations
 
 
-__all__ = ["CellTree", "TreeNode"]
+__all__ = ["CellTree", "SourceTree", "TreeNode"]
 
 from typing import TypeVar
 
@@ -54,11 +54,11 @@ class TreeNode[N, V]:
         return self.value_cell.value
 
 
-class CellTree[N, V]:
+class SourceTree[N, V]:
     """A reactive tree: nodes keyed by stable id. Each node's per-level
     reactivity is independent of every other node's.
 
-    Mirrors ``lazily-rs/src/cell_tree.rs`` (``CellTree<Id, V>``) and the Lean
+    Mirrors ``lazily-rs/src/cell_tree.rs`` (``SourceTree<Id, V>``) and the Lean
     ``LazilyFormal.Tree`` model.
     """
 
@@ -136,3 +136,20 @@ class CellTree[N, V]:
         clamped = min(index, len(p.children))
         p.children.insert(clamped, child)
         p.order_signal.set(p.order_signal.value + 1)
+
+
+# ---------------------------------------------------------------------------
+# Deprecated aliases (v2 kernel rename)
+# ---------------------------------------------------------------------------
+# The v2 kernel renamed the node kinds to ``Source`` and ``Computed``; the tree
+# type still said ``Cell``, a vocabulary the kernel no longer uses. Its nodes
+# hold input cells, so ``SourceTree`` says which kind of entry it holds — the
+# same move that produced ``SourceMap`` / ``ComputedMap``.
+#
+# The old name stays as a plain alias so existing imports keep working — a
+# rename is not a removal. Importing it from the ``lazily`` package root emits a
+# :class:`DeprecationWarning` (see ``lazily/__init__.py``); the submodule alias
+# below is the un-warned escape hatch.
+
+#: Deprecated alias of :class:`SourceTree`.
+CellTree = SourceTree

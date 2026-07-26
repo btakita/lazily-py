@@ -1,4 +1,4 @@
-"""Ordered keyed reactive tree — CellTree per-node / per-level laws.
+"""Ordered keyed reactive tree — SourceTree per-node / per-level laws.
 
 The Python counterpart of the Lean ``LazilyFormal.Tree`` formal model in
 ``lazily-formal``. Each test mirrors a named theorem (per-node value reactivity,
@@ -7,7 +7,7 @@ per-level membership/order reactivity, atomic-move identity preservation).
 
 from __future__ import annotations
 
-from lazily import CellTree
+from lazily import SourceTree
 
 
 # =================================================================================
@@ -19,7 +19,7 @@ from lazily import CellTree
 
 def test_set_node_value_preserves_other_nodes() -> None:
     ctx: dict = {}
-    t = CellTree[int, int](ctx)
+    t = SourceTree[int, int](ctx)
     t.add(1, 10)
     t.add(2, 20)
     t.insert_child(1, 11, 111)
@@ -31,7 +31,7 @@ def test_set_node_value_preserves_other_nodes() -> None:
 
 def test_set_node_value_preserves_node_signals() -> None:
     ctx: dict = {}
-    t = CellTree[int, int](ctx)
+    t = SourceTree[int, int](ctx)
     t.add(1, 10)
     t.insert_child(1, 11, 111)
     node1 = t.node(1)
@@ -57,7 +57,7 @@ def test_set_node_value_preserves_node_signals() -> None:
 
 def test_move_child_preserves_non_parent() -> None:
     ctx: dict = {}
-    t = CellTree[int, int](ctx)
+    t = SourceTree[int, int](ctx)
     t.add(1, 10)
     t.add(2, 20)
     t.insert_child(1, 11, 111)
@@ -75,7 +75,7 @@ def test_move_child_preserves_non_parent() -> None:
 
 def test_move_child_preserves_parent_value() -> None:
     ctx: dict = {}
-    t = CellTree[int, int](ctx)
+    t = SourceTree[int, int](ctx)
     t.add(1, 10)
     t.insert_child(1, 11, 111)
     t.insert_child(1, 12, 122)
@@ -85,7 +85,7 @@ def test_move_child_preserves_parent_value() -> None:
 
 def test_move_child_advances_order_signal_only() -> None:
     ctx: dict = {}
-    t = CellTree[int, int](ctx)
+    t = SourceTree[int, int](ctx)
     t.add(1, 10)
     t.insert_child(1, 11, 111)
     t.insert_child(1, 12, 122)
@@ -106,7 +106,7 @@ def test_move_child_advances_order_signal_only() -> None:
 
 def test_insert_child_advances_membership_and_order() -> None:
     ctx: dict = {}
-    t = CellTree[int, int](ctx)
+    t = SourceTree[int, int](ctx)
     t.add(1, 10)
     node1 = t.node(1)
     assert node1 is not None
