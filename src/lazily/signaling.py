@@ -81,9 +81,21 @@ class SignalingFrame:
     message: str | None = None
 
     @staticmethod
-    def from_wire(d: dict[str, Any]) -> SignalingFrame:
+    def from_wire(d: dict[str, Any], *, direction: str | None = None) -> SignalingFrame:
         """Decode a wire JSON object into a typed frame."""
         t = d["type"]
+        try:
+            SignalingFrameKind(t)
+        except ValueError as exc:
+            raise ValueError(f"unknown signaling frame type: {t!r}") from exc
+        if "to" in d and "from" in d:
+            raise ValueError("a signaling frame cannot carry both `to` and `from`")
+        if direction == "client" and "from" in d:
+            raise ValueError("a client signaling frame cannot carry `from`")
+        if direction == "server" and "to" in d:
+            raise ValueError("a server signaling frame cannot carry `to`")
+        if t == "welcome" and d.get("peer") in d.get("peers", []):
+            raise ValueError("a welcome roster cannot contain the joining peer")
         return SignalingFrame(
             type=t,
             peer=d.get("peer"),

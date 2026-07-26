@@ -39,7 +39,7 @@ def test_signaling_frames_round_trip() -> None:
     assert fix["kind"] == "SignalingFrames"
     for frame in fix["frames"]:
         wire = frame["wire"]
-        decoded = SignalingFrame.from_wire(wire)
+        decoded = SignalingFrame.from_wire(wire, direction=frame["direction"])
         assert decoded.to_wire() == wire, f"round-trip mismatch: {frame['label']}"
         # Client-directed frames carry `to`; server-forwarded carry `from`.
         if frame["direction"] == "client":
@@ -63,7 +63,7 @@ def test_signaling_anti_spoof_session() -> None:
 
     for step in fix["steps"]:
         inp = step["input"]
-        frame = SignalingFrame.from_wire(inp["recv"])
+        frame = SignalingFrame.from_wire(inp["recv"], direction="client")
         emits = room.handle(inp["conn"], frame)
         assert len(emits) == len(step["expect"]), (
             f"step {inp}: emit count {len(emits)} != {len(step['expect'])}"
@@ -77,6 +77,28 @@ def test_signaling_anti_spoof_session() -> None:
             # Anti-spoof: forwarded frames carry a server-stamped `from`,
             # never a client-supplied value; `to`/`from` never both present.
             assert not (emitted.to is not None and emitted.frm is not None)
+
+    for reject in fix["rejects"]:
+        try:
+            SignalingFrame.from_wire(reject["input"]["recv"], direction="client")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"accepted rejected frame: {reject['label']}")
+
+
+def test_signaling_negative_frames_are_rejected() -> None:
+    fix = _load("signaling/frames.json")
+    for reject in fix["rejects"]:
+        try:
+            SignalingFrame.from_wire(
+                reject["wire"],
+                direction=reject["direction"],
+            )
+        except (KeyError, ValueError):
+            pass
+        else:
+            raise AssertionError(f"accepted rejected frame: {reject['label']}")
 
 
 def test_signaling_welcome_roster_excludes_self() -> None:
