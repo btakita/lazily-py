@@ -1,4 +1,4 @@
-.PHONY: init build test lint format type-check clean publish-test publish bench bench-scale compile
+.PHONY: init build test lint format type-check clean publish-test publish bench bench-scale compile conformance-coverage
 
 # Install development dependencies and package in editable mode
 init: PY_VERSION = $(shell [ -f .python-version ] && \
@@ -50,7 +50,7 @@ type-check:
 	poe ty
 
 # Run all checks
-check: format lint type-check test
+check: format lint type-check test conformance-coverage
 
 # Run the micro-benchmark suite (see BENCHMARKS.md)
 bench:
@@ -81,3 +81,9 @@ publish: build
 	@echo "WARNING: This will publish to the real PyPI!"
 	@read -p "Are you sure? (y/N) " confirm && [ "$$confirm" = "y" ]
 	python -m twine upload dist/*
+
+# Conformance-coverage guard (#portconformancecoverage). Static: fails when the
+# canonical corpus grows a fixture no test in this repo even names. Naming is not
+# replaying — see the script header for what this does and does not prove.
+conformance-coverage:
+	./scripts/check-conformance-coverage.sh
