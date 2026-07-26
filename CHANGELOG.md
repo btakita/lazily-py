@@ -2,6 +2,21 @@
 
 ### Changed
 
+- **Renamed the keyed maps to `SourceMap` / `ComputedMap`**, finishing the v2 kernel
+  migration: the node kinds became `Source` and `Computed`, and the map names now say which
+  kind of entry they hold instead of the pre-v2 `Cell` / `Slot` vocabulary.
+  `CellMap` -> `SourceMap`, `SlotMap` -> `ComputedMap`, and the `ThreadSafe*` / `Async*`
+  variants alongside them.
+
+### Deprecated
+
+- The old names are kept as deprecated aliases of the new ones, so existing callers still
+  compile. Conformance runners accept both the old and new `model` spellings in a fixture;
+  the corpus emits only the new. Fixture FILE names are unchanged.
+
+
+### Changed
+
 - **v2 Cell kernel (`#lzcellkernel`) — removed the v1 value vocabulary.**
   `Signal` / `signal` / `signal_def`, `formula` / `formula_def` / `FormulaCell`,
   `SourceCell` / `SourceCellSlot`, and the `Computed.drive()` / `.undrive()` /
