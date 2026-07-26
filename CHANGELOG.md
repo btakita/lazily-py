@@ -1,4 +1,30 @@
-## Unreleased
+## 0.37.0
+
+### Added
+
+- **The `ReactiveMap` Core surface now binds every flavor.** Ordering and atomic
+  move bound only the single-threaded map; the thread-safe and async maps
+  exposed the present set and nothing else. All flavors now carry `keys`, `len`,
+  `is_empty`, `contains_key`, `position`, `move_to` / `move_before` /
+  `move_after`, and `remove`, each with membership and order signals minted on
+  its own graph. A move touches no entry handle and awaits nothing, so it is
+  neither thread- nor async-coloured.
+- A shared, graph-agnostic `KeyedOrder` core holding the present set, the key
+  order, and the move algebra. It deliberately holds no reactivity: membership
+  and order invalidation is a graph write, so each flavor owns its own cells.
+- The canonical ordering fixtures now replay against all three flavors, with
+  invalidation measured by recompute count rather than a cache flag, plus
+  directional move coverage the canonical corpus does not provide (its only
+  `move_before` step moves a key that already follows its anchor, so the
+  `anchor - 1` branch was never exercised).
+
+### Fixed
+
+- `move_to` clamped only the upper end, so a negative index reached Python's
+  insert-from-the-right semantics and `move_to(key, -1)` landed the key
+  second-to-last instead of at the front. Both ends are clamped now.
+
+## 0.36.0
 
 ### Changed
 

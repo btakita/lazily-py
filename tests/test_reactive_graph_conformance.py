@@ -274,7 +274,6 @@ class ComputeFailed(Exception):
     """
 
 
-
 def _ok(value: Any) -> tuple[str, Any]:
     return ("ok", value)
 

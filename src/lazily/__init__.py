@@ -387,7 +387,7 @@ __all__ = [
     "windowing",
     "word_lcs_len",
 ]
-__version__ = "0.33.0"
+__version__ = "0.37.0"
 
 import warnings
 from typing import TYPE_CHECKING, Any
