@@ -146,10 +146,10 @@ def _bench_lis_by(keys: int, samples: int) -> BenchmarkResult:
 
 
 def _bench_cellmap_insert(n: int) -> BenchmarkResult:
-    from lazily import CellMap
+    from lazily import SourceMap
 
     def step() -> None:
-        cmap = CellMap({})
+        cmap = SourceMap({})
         for i in range(50):
             cmap.set(i, i)
 
@@ -241,7 +241,7 @@ def run_benchmarks(samples: int = 10_000) -> list[BenchmarkResult]:
 
     The suite exercises the reactive core (cached read + invalidate/recompute),
     keyed reconciliation (LIS move-minimized diff at 10 keys + the patience-sort
-    kernel at 10/50/100 keys), :class:`CellMap` insertion, :class:`TextCrdt`
+    kernel at 10/50/100 keys), :class:`SourceMap` insertion, :class:`TextCrdt`
     merge, the :class:`CrdtPlaneRuntime` apply paths (idempotent + indexed
     lookup), and the :class:`SemTree` dirty-chain walk.
     """

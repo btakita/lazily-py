@@ -360,11 +360,11 @@ Beyond the wire protocol, lazily-py implements the `lazily-spec` compute-layer
 `MUST`s, each ported from its Lean formal model in `lazily-formal` and covered
 by property tests that mirror the named Lean theorems.
 
-### Keyed reactive collections (`ReactiveMap` / `CellMap` / `SlotMap` / `CellTree`)
+### Keyed reactive collections (`ReactiveMap` / `SourceMap` / `ComputedMap` / `CellTree`)
 
 One generic keyed primitive `ReactiveMap` over a handle kind (`#reactivemap`),
-with two specializations: `CellMap` (input-cell entries — adds cell-only `set`
-and eager value-minting `entry`/`entry_with`) and `SlotMap` (derived-slot entries
+with two specializations: `SourceMap` (input-cell entries — adds cell-only `set`
+and eager value-minting `entry`/`entry_with`) and `ComputedMap` (derived-slot entries
 — `get_or_insert_with` mints a slot on first access for lazy materialization,
 `materialize_all` pre-mints the keyset for eager; no `set`). No eager/lazy mode
 flag — eager is a pre-mint loop, lazy is mint-on-access.
@@ -377,8 +377,8 @@ stability). `CellTree` extends the model to an ordered keyed tree with per-node
 value and per-level membership/order reactivity.
 
 - `ReactiveMap.get_or_insert_with` / `.remove` / `.move_to` / `.move_before` /
-  `.move_after`; `membership_signal` / `order_signal`; `CellMap.entry` / `.set`;
-  `SlotMap.materialize_all`.
+  `.move_after`; `membership_signal` / `order_signal`; `SourceMap.entry` / `.set`;
+  `ComputedMap.materialize_all`.
 - `CellTree.set_node_value` / `.insert_child` / `.move_child`.
 
 ### Keyed reconciliation (`reconcile_ops`)
@@ -481,7 +481,7 @@ snapshot and the delta.
 ### Instrumentation / benchmarks (`lazily.benchmarks`)
 
 `run_benchmarks()` micro-benchmarks the reactive core (cached read + invalidate
-recompute), keyed reconciliation (LIS move-minimized diff), `CellMap` insertion,
+recompute), keyed reconciliation (LIS move-minimized diff), `SourceMap` insertion,
 `TextCrdt` merge, and `CrdtPlaneRuntime` idempotent apply. Each entry reports
 sample count, total elapsed, and per-op time; runnable as `python -m
 lazily.benchmarks`.

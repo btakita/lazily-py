@@ -35,6 +35,7 @@ __all__ = [
     "AsyncCellHandle",
     "AsyncCellMap",
     "AsyncComputeContext",
+    "AsyncComputedMap",
     "AsyncContext",
     "AsyncContextDisposedError",
     "AsyncEffect",
@@ -43,6 +44,7 @@ __all__ = [
     "AsyncSlot",
     "AsyncSlotHandle",
     "AsyncSlotMap",
+    "AsyncSourceMap",
     "AsyncTeardownScope",
     "AwarenessCell",
     "BackpressurePolicy",
@@ -92,6 +94,7 @@ __all__ = [
     "ComputeEffect",
     "ComputeOps",
     "Computed",
+    "ComputedMap",
     "Context",
     "CrdtOp",
     "CrdtPlaneRuntime",
@@ -252,6 +255,7 @@ __all__ = [
     "SnapshotProvider",
     "SortKey",
     "Source",
+    "SourceMap",
     "SourceSlot",
     "SpillMode",
     "SpillPage",
@@ -272,9 +276,11 @@ __all__ = [
     "TextElement",
     "TextOp",
     "ThreadSafeCellMap",
+    "ThreadSafeComputedMap",
     "ThreadSafeContext",
     "ThreadSafeReactiveMap",
     "ThreadSafeSlotMap",
+    "ThreadSafeSourceMap",
     "ThrottleCell",
     "ThrottleCore",
     "ThrottleEdge",
@@ -383,6 +389,9 @@ __all__ = [
 ]
 __version__ = "0.33.0"
 
+import warnings
+from typing import TYPE_CHECKING, Any
+
 from . import (
     async_context,
     async_effect,
@@ -425,7 +434,7 @@ from .async_context import (
     AsyncTeardownScope,
 )
 from .async_effect import AsyncEffect, EffectEvent, EffectState
-from .async_reactive_family import AsyncCellMap, AsyncReactiveMap, AsyncSlotMap
+from .async_reactive_family import AsyncComputedMap, AsyncReactiveMap, AsyncSourceMap
 from .async_slot import AsyncSlot, SlotEvent, SlotState
 from .batch import batch, batch_context, in_batch
 from .benchmarks import Benchmark, BenchmarkResult, run_benchmarks
@@ -438,7 +447,7 @@ from .cell import (
     source,
     source_def,
 )
-from .collection import CellMap, EntryKind, ReactiveMap, SlotMap
+from .collection import ComputedMap, EntryKind, ReactiveMap, SourceMap
 from .command import (
     COMMAND_PLANE_FEATURE,
     CallState,
@@ -727,9 +736,9 @@ from .temporal import (
 from .textcrdt import ROOT, OpId, TextCrdt, TextElement, TextOp
 from .thread_safe import ThreadSafeContext
 from .thread_safe_reactive_family import (
-    ThreadSafeCellMap,
+    ThreadSafeComputedMap,
     ThreadSafeReactiveMap,
-    ThreadSafeSlotMap,
+    ThreadSafeSourceMap,
 )
 from .transport import (
     ARROW_DEFAULT_CAPACITY,
@@ -766,3 +775,53 @@ from .work_queue import (
     WorkQueueItem,
     WorkQueueReaderHandles,
 )
+
+
+# ---------------------------------------------------------------------------
+# Deprecated aliases (v2 kernel rename)
+# ---------------------------------------------------------------------------
+# The v2 kernel renamed the node kinds to ``Source`` and ``Computed``; the keyed
+# map types still said ``Cell`` / ``Slot``, a vocabulary the kernel no longer
+# uses. ``SourceMap`` / ``ComputedMap`` (and the ThreadSafe / Async variants) now
+# say which kind of entry they hold.
+#
+# A rename is not a removal: every old name stays importable. Reaching for one
+# through the package root emits a :class:`DeprecationWarning` naming the
+# replacement; the ``lazily.collection`` /
+# ``lazily.thread_safe_reactive_family`` / ``lazily.async_reactive_family``
+# submodules expose the same aliases without a warning.
+
+#: Deprecated map spelling -> its current name.
+_DEPRECATED_ALIASES = {
+    "AsyncCellMap": "AsyncSourceMap",
+    "AsyncSlotMap": "AsyncComputedMap",
+    "CellMap": "SourceMap",
+    "SlotMap": "ComputedMap",
+    "ThreadSafeCellMap": "ThreadSafeSourceMap",
+    "ThreadSafeSlotMap": "ThreadSafeComputedMap",
+}
+
+if TYPE_CHECKING:
+    # Bound statically so a type checker still resolves the deprecated names;
+    # at runtime they are served by ``__getattr__`` below so the access warns.
+    AsyncCellMap = AsyncSourceMap
+    AsyncSlotMap = AsyncComputedMap
+    CellMap = SourceMap
+    SlotMap = ComputedMap
+    ThreadSafeCellMap = ThreadSafeSourceMap
+    ThreadSafeSlotMap = ThreadSafeComputedMap
+
+
+def __getattr__(name: str) -> Any:
+    """Serve the deprecated keyed-map names, warning once per access site."""
+    current = _DEPRECATED_ALIASES.get(name)
+    if current is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    warnings.warn(
+        f"lazily.{name} is deprecated; use lazily.{current} instead. "
+        "The v2 kernel renamed the node kinds to Source and Computed, so the "
+        "keyed maps are SourceMap / ComputedMap.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return globals()[current]

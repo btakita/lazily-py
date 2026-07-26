@@ -1,4 +1,4 @@
-"""Keyed reactive collections — ``CellMap`` / ``SlotMap`` independence laws
+"""Keyed reactive collections — ``SourceMap`` / ``ComputedMap`` independence laws
 (``#reactivemap``).
 
 The Python counterpart of the Lean ``LazilyFormal.Collection`` formal model in
@@ -8,7 +8,7 @@ reactive signals + atomic-move identity preservation + per-key mint identity).
 
 from __future__ import annotations
 
-from lazily import CellMap, Slot, SlotMap
+from lazily import ComputedMap, Slot, SourceMap
 
 
 # =================================================================================
@@ -20,7 +20,7 @@ from lazily import CellMap, Slot, SlotMap
 
 def test_set_entry_value_preserves_membership_and_order() -> None:
     ctx: dict = {}
-    cm = CellMap[str, int](ctx)
+    cm = SourceMap[str, int](ctx)
     cm.entry("a", 1)
     cm.entry("b", 2)
     m_before = cm.membership_signal.value
@@ -35,7 +35,7 @@ def test_set_entry_value_preserves_membership_and_order() -> None:
 
 def test_set_entry_value_preserves_siblings() -> None:
     ctx: dict = {}
-    cm = CellMap[str, int](ctx)
+    cm = SourceMap[str, int](ctx)
     cm.entry("a", 1)
     cm.entry("b", 2)
     cm.set("a", 99)
@@ -51,7 +51,7 @@ def test_set_entry_value_preserves_siblings() -> None:
 
 def test_move_to_preserves_membership_and_values() -> None:
     ctx: dict = {}
-    cm = CellMap[str, int](ctx)
+    cm = SourceMap[str, int](ctx)
     cm.entry("a", 1)
     cm.entry("b", 2)
     cm.entry("c", 3)
@@ -68,7 +68,7 @@ def test_move_to_preserves_membership_and_values() -> None:
 
 def test_move_to_advances_order_signal_only() -> None:
     ctx: dict = {}
-    cm = CellMap[str, int](ctx)
+    cm = SourceMap[str, int](ctx)
     cm.entry("a", 1)
     cm.entry("b", 2)
     m_before = cm.membership_signal.value
@@ -82,7 +82,7 @@ def test_move_to_advances_order_signal_only() -> None:
 
 def test_move_before_and_move_after() -> None:
     ctx: dict = {}
-    cm = CellMap[str, int](ctx)
+    cm = SourceMap[str, int](ctx)
     for k, v in [("a", 1), ("b", 2), ("c", 3), ("d", 4)]:
         cm.entry(k, v)
     cm.move_before("d", "b")  # [a,b,c,d] -> [a,d,b,c]
@@ -98,7 +98,7 @@ def test_move_before_and_move_after() -> None:
 
 def test_add_key_advances_membership_and_order() -> None:
     ctx: dict = {}
-    cm = CellMap[str, int](ctx)
+    cm = SourceMap[str, int](ctx)
     cm.entry("a", 1)
     m0, o0 = cm.membership_signal.value, cm.order_signal.value
     cm.entry("b", 2)
@@ -111,7 +111,7 @@ def test_add_key_advances_membership_and_order() -> None:
 
 def test_remove_key_advances_signals() -> None:
     ctx: dict = {}
-    cm = CellMap[str, int](ctx)
+    cm = SourceMap[str, int](ctx)
     cm.entry("a", 1)
     cm.entry("b", 2)
     m0, o0 = cm.membership_signal.value, cm.order_signal.value
@@ -129,7 +129,7 @@ def test_remove_key_advances_signals() -> None:
 
 def test_len_reader_not_invalidated_by_move() -> None:
     ctx: dict = {}
-    cm = CellMap[str, int](ctx)
+    cm = SourceMap[str, int](ctx)
     cm.entry("a", 1)
     cm.entry("b", 2)
 
@@ -160,9 +160,9 @@ def test_len_reader_not_invalidated_by_move() -> None:
 # =================================================================================
 
 
-def test_cell_map_entry_idempotent_after_first() -> None:
+def test_source_map_entry_idempotent_after_first() -> None:
     ctx: dict = {}
-    cm = CellMap[str, int](ctx)
+    cm = SourceMap[str, int](ctx)
     c1 = cm.entry("x", 1)
     c2 = cm.entry("x", 1)  # second request -> same cell
     assert c1 is c2
@@ -171,9 +171,9 @@ def test_cell_map_entry_idempotent_after_first() -> None:
     assert c3 is not c1
 
 
-def test_slot_map_get_or_insert_with_mints_once() -> None:
+def test_computed_map_get_or_insert_with_mints_once() -> None:
     ctx: dict = {}
-    sm = SlotMap[str, int](ctx)
+    sm = ComputedMap[str, int](ctx)
     calls = [0]
 
     def factory(_c: object, k: str) -> int:

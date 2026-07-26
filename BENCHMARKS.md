@@ -4,7 +4,7 @@ Wall-clock benchmarks for the lazily-py hot paths. Two suites:
 
 - **Micro-benchmarks** — the in-library suite in
   [`src/lazily/benchmarks.py`](src/lazily/benchmarks.py) (`run_benchmarks()`),
-  covering the reactive core, keyed reconciliation, `CellMap`, `TextCrdt`, the
+  covering the reactive core, keyed reconciliation, `SourceMap`, `TextCrdt`, the
   CRDT plane, and the `SemTree` dirty-chain walk.
 - **Scale** — a large spreadsheet-shaped graph
   ([`src/lazily/scale_bench.py`](src/lazily/scale_bench.py)) mirroring the
@@ -69,7 +69,7 @@ native core; **pure-Python** = the shipped fallback (no `.so`).
 | `reconcile.lis_n10` | 6.1 | 6.1 | n/a¹ | The patience-sort LIS kernel over a 10-key level (half rotated). New `#lzpylisnlogn` gate. |
 | `reconcile.lis_n50` | 39 | 39 | n/a¹ | Same kernel over 50 keys — unbenchable before `#lzpylisnlogn` (O(2ⁿ)). |
 | `reconcile.lis_n100` | 107 | 107 | n/a¹ | Same kernel over 100 keys — unbenchable before `#lzpylisnlogn` (O(2ⁿ)). |
-| `cellmap.insert_50` | 15.8 | 21.1 | ~1.3× | Build a `CellMap` and insert 50 keyed entries (whole-collection construction, not per-insert). |
+| `cellmap.insert_50` | 15.8 | 21.1 | ~1.3× | Build a `SourceMap` and insert 50 keyed entries (whole-collection construction, not per-insert). |
 | `textcrdt.merge_disjoint` | 1.43 | 1.32 | n/a¹ | Merge two disjoint `TextCrdt` documents (Fugue/RGA order recomputed). |
 | `crdt_plane.idempotent_apply` | 0.089 | 0.087 | n/a¹ | Re-apply an already-seen op to a `CrdtPlaneRuntime` (idempotent dedupe path). |
 | `crdt_plane.apply_indexed_100` | 300 | 300 | n/a¹ | Apply 100 stamp-advancing updates to a 100-entry plane — each re-resolves an existing `(node, key)` via the `#lzpyfindindex` dict (was an O(n) scan per op). |

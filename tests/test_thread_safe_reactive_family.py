@@ -1,4 +1,4 @@
-"""``ThreadSafeCellMap`` / ``ThreadSafeSlotMap`` tests (``#reactivemap``,
+"""``ThreadSafeSourceMap`` / ``ThreadSafeComputedMap`` tests (``#reactivemap``,
 thread-safe flavor).
 
 Mirrors the ``lazily-rs`` ``thread_safe_reactive_family.rs`` unit tests.
@@ -18,22 +18,22 @@ from lazily import (
     Cell,
     EntryKind,
     Slot,
-    ThreadSafeCellMap,
+    ThreadSafeComputedMap,
     ThreadSafeContext,
-    ThreadSafeSlotMap,
+    ThreadSafeSourceMap,
 )
 
 
-def test_eager_slot_map_materializes_all_up_front() -> None:
-    fam: ThreadSafeSlotMap[int, int] = ThreadSafeSlotMap({})
+def test_eager_computed_map_materializes_all_up_front() -> None:
+    fam: ThreadSafeComputedMap[int, int] = ThreadSafeComputedMap({})
     fam.materialize_all([0, 1, 2, 5, 9], lambda _c, k: k * 3)
     assert fam.present_count() == 5
     assert all(fam.is_present(k) for k in (0, 1, 2, 5, 9))
     assert fam.entry_kind is EntryKind.SLOT
 
 
-def test_lazy_slot_map_defers_until_read() -> None:
-    fam: ThreadSafeSlotMap[int, int] = ThreadSafeSlotMap({})
+def test_lazy_computed_map_defers_until_read() -> None:
+    fam: ThreadSafeComputedMap[int, int] = ThreadSafeComputedMap({})
     assert fam.present_count() == 0
     assert fam.get_or_insert_with(5, lambda _c, k: k * 3) == 15
     assert fam.is_present(5)
@@ -41,23 +41,23 @@ def test_lazy_slot_map_defers_until_read() -> None:
 
 
 def test_eager_and_lazy_observe_identically() -> None:
-    eager: ThreadSafeSlotMap[int, int] = ThreadSafeSlotMap({})
+    eager: ThreadSafeComputedMap[int, int] = ThreadSafeComputedMap({})
     eager.materialize_all([0, 1, 2, 5, 9], lambda _c, k: k * 3)
-    lazy: ThreadSafeSlotMap[int, int] = ThreadSafeSlotMap({})
+    lazy: ThreadSafeComputedMap[int, int] = ThreadSafeComputedMap({})
     for k in (0, 1, 2, 5, 9):
         assert eager.observe(k) == lazy.get_or_insert_with(k, lambda _c, k: k * 3)
 
 
-def test_cell_map_materializes_at_build() -> None:
-    fam: ThreadSafeCellMap[str, int] = ThreadSafeCellMap({})
+def test_source_map_materializes_at_build() -> None:
+    fam: ThreadSafeSourceMap[str, int] = ThreadSafeSourceMap({})
     for k in ("a", "b", "c"):
         fam.set(k, 0)
     assert fam.entry_kind is EntryKind.CELL
     assert fam.present_count() == 3
 
 
-def test_cell_map_writes_through_coalescing_context() -> None:
-    fam: ThreadSafeCellMap[int, int] = ThreadSafeCellMap({})
+def test_source_map_writes_through_coalescing_context() -> None:
+    fam: ThreadSafeSourceMap[int, int] = ThreadSafeSourceMap({})
     fam.set(7, 7)
     assert fam.observe(7) == 7
     fam.set(7, 100)  # routed through the ThreadSafeContext boundary
@@ -67,7 +67,7 @@ def test_cell_map_writes_through_coalescing_context() -> None:
 def test_observe_is_reactive_when_factory_reads_a_cell() -> None:
     ctx: dict = {}
     src = Cell(ctx, 10)
-    fam: ThreadSafeSlotMap[int, int] = ThreadSafeSlotMap(ctx)
+    fam: ThreadSafeComputedMap[int, int] = ThreadSafeComputedMap(ctx)
     fam.materialize_all([1], lambda c, k: c.read(src) + k)
     seen: list[int] = []
     reader = Slot(lambda c: fam.observe(1, c))
@@ -80,14 +80,14 @@ def test_observe_is_reactive_when_factory_reads_a_cell() -> None:
 
 
 def test_stable_handle_across_repeated_get() -> None:
-    fam: ThreadSafeSlotMap[int, int] = ThreadSafeSlotMap({})
+    fam: ThreadSafeComputedMap[int, int] = ThreadSafeComputedMap({})
     h1 = fam.get_or_insert_handle(3, lambda _c, k: k * 2)
     h2 = fam.get_or_insert_handle(3, lambda _c, k: k * 2)
     assert h1 is h2  # first-writer-wins keeps one stable handle
 
 
 def test_present_set_grows_monotonically() -> None:
-    fam: ThreadSafeSlotMap[int, int] = ThreadSafeSlotMap({})
+    fam: ThreadSafeComputedMap[int, int] = ThreadSafeComputedMap({})
     fam.get_or_insert_with(5, lambda _c, k: k)
     fam.get_or_insert_with(5, lambda _c, k: k)  # repeat: no growth
     fam.get_or_insert_with(9, lambda _c, k: k)
@@ -100,7 +100,9 @@ def test_materialization_confluence_under_concurrent_reads() -> None:
     # set (as a set) and every observed value MUST be identical regardless of the
     # interleaving the lock admits (materialize_present_comm / _observe_comm).
     keys = list(range(64))
-    fam: ThreadSafeSlotMap[int, int] = ThreadSafeSlotMap({}, ts=ThreadSafeContext())
+    fam: ThreadSafeComputedMap[int, int] = ThreadSafeComputedMap(
+        {}, ts=ThreadSafeContext()
+    )
     handles: dict[int, list[object]] = {k: [] for k in keys}
     lock = threading.Lock()
     barrier = threading.Barrier(8)

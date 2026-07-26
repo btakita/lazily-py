@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from lazily import (
     CellCrdt,
-    CellMap,
     CrdtOp,
     CrdtPlaneRuntime,
     LwwRegister,
@@ -16,6 +15,7 @@ from lazily import (
     PnCounter,
     SemTree,
     SeqCrdt,
+    SourceMap,
     StateMirror,
     TextCrdt,
     WireStamp,
@@ -341,13 +341,13 @@ def test_benchmarks_run_and_report() -> None:
 
 
 # ---------------------------------------------------------------------------
-# SemTree.from_json + CellMap sanity (regression)
+# SemTree.from_json + SourceMap sanity (regression)
 # ---------------------------------------------------------------------------
 
 
-def test_cellmap_atomic_move_preserves_identity() -> None:
+def test_source_map_atomic_move_preserves_identity() -> None:
     ctx: dict = {}
-    cmap = CellMap[int, int](ctx)
+    cmap = SourceMap[int, int](ctx)
     cmap.entry(1, 10)
     cell_before = cmap.value_cell(1)
     cmap.move_to(1, 0)

@@ -10,9 +10,9 @@ Keys ``K`` map to per-entry reactive nodes (:class:`~lazily.Cell` inputs /
 owning :class:`~lazily.ThreadSafeContext`. The present-set state is guarded by its
 own lock so a keyed map can be materialized concurrently from multiple threads.
 
-Its two specializations are :class:`ThreadSafeCellMap` (input cells) and
-:class:`ThreadSafeSlotMap` (derived slots). Eager materialization is a pre-mint
-loop (:meth:`ThreadSafeSlotMap.materialize_all`); lazy is mint-on-access
+Its two specializations are :class:`ThreadSafeSourceMap` (input cells) and
+:class:`ThreadSafeComputedMap` (derived slots). Eager materialization is a pre-mint
+loop (:meth:`ThreadSafeComputedMap.materialize_all`); lazy is mint-on-access
 (:meth:`ThreadSafeReactiveMap.get_or_insert_with`) — there is no eager/lazy mode
 flag. What the thread-safe flavor adds is **materialization confluence** (proved
 in ``lazily-formal`` as ``materialize_present_comm`` / ``materialize_observe_comm``):
@@ -36,8 +36,10 @@ if TYPE_CHECKING:
 
 __all__ = [
     "ThreadSafeCellMap",
+    "ThreadSafeComputedMap",
     "ThreadSafeReactiveMap",
     "ThreadSafeSlotMap",
+    "ThreadSafeSourceMap",
 ]
 
 K = TypeVar("K")
@@ -48,8 +50,8 @@ class ThreadSafeReactiveMap[K, V]:
     """The thread-safe keyed reactive collection (``#reactivemap``): keys map to
     per-entry reactive nodes on a :class:`~lazily.ThreadSafeContext`. Present-set
     state is guarded by a lock; materialization is confluent under concurrent
-    access. Its two specializations are :class:`ThreadSafeCellMap` (input cells)
-    and :class:`ThreadSafeSlotMap` (derived slots).
+    access. Its two specializations are :class:`ThreadSafeSourceMap` (input cells)
+    and :class:`ThreadSafeComputedMap` (derived slots).
 
     Cell entries are written through the owning context's coalescing
     :meth:`~lazily.ThreadSafeContext.set_cell` / :meth:`~lazily.ThreadSafeContext.batch`
@@ -112,7 +114,7 @@ class ThreadSafeReactiveMap[K, V]:
         self, key: K, factory: Callable[[Any, K], V], ctx: Any = None
     ) -> V:
         """Get the value at ``key``, minting the entry via ``factory(view, key)``
-        first if absent. For a :class:`ThreadSafeSlotMap` this is the lazy
+        first if absent. For a :class:`ThreadSafeComputedMap` this is the lazy
         materialization pull — confluent across concurrent materialization
         orders. Pass the caller's compute ``ctx`` to value-thread the read of the
         entry; omit for an untracked top-level read (``#lzcellkernel``)."""
@@ -162,9 +164,9 @@ class ThreadSafeReactiveMap[K, V]:
         return self._HANDLE.KIND
 
 
-class ThreadSafeCellMap[K, V](ThreadSafeReactiveMap[K, V]):
+class ThreadSafeSourceMap[K, V](ThreadSafeReactiveMap[K, V]):
     """A thread-safe **input-cell** map: every entry is an always-materialized
-    :class:`~lazily.Cell`. The ``Send + Sync`` analog of :class:`~lazily.CellMap`.
+    :class:`~lazily.Cell`. The ``Send + Sync`` analog of :class:`~lazily.SourceMap`.
     Adds cell-only :meth:`set`, routed through the coalescing context boundary."""
 
     __slots__ = ()
@@ -182,10 +184,10 @@ class ThreadSafeCellMap[K, V](ThreadSafeReactiveMap[K, V]):
         self.get_or_insert_handle(key, lambda _view, _k: value)
 
 
-class ThreadSafeSlotMap[K, V](ThreadSafeReactiveMap[K, V]):
+class ThreadSafeComputedMap[K, V](ThreadSafeReactiveMap[K, V]):
     """A thread-safe **derived-slot** map: entries are :class:`~lazily.slot` nodes
     minted lazily on access or eagerly via :meth:`materialize_all`. The
-    ``Send + Sync`` analog of :class:`~lazily.SlotMap`; a slot's value is derived,
+    ``Send + Sync`` analog of :class:`~lazily.ComputedMap`; a slot's value is derived,
     so it has **no ``set``**."""
 
     __slots__ = ()
@@ -201,3 +203,17 @@ class ThreadSafeSlotMap[K, V](ThreadSafeReactiveMap[K, V]):
         read value-threads (``#lzcellkernel``)."""
         for key in keys:
             self.get_or_insert_handle(key, factory)
+
+
+# ---------------------------------------------------------------------------
+# Deprecated aliases (v2 kernel rename)
+# ---------------------------------------------------------------------------
+# See ``lazily/collection.py`` — the v2 kernel node kinds are ``Source`` and
+# ``Computed``; the old map names stay as plain aliases so existing imports keep
+# working. Importing them from the ``lazily`` package root emits a
+# :class:`DeprecationWarning`.
+
+#: Deprecated alias of :class:`ThreadSafeSourceMap`.
+ThreadSafeCellMap = ThreadSafeSourceMap
+#: Deprecated alias of :class:`ThreadSafeComputedMap`.
+ThreadSafeSlotMap = ThreadSafeComputedMap

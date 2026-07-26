@@ -1,5 +1,5 @@
-"""Keyed reactive collections: the generic ``ReactiveMap`` and its ``CellMap`` /
-``SlotMap`` specializations (``#reactivemap``).
+"""Keyed reactive collections: the generic ``ReactiveMap`` and its ``SourceMap`` /
+``ComputedMap`` specializations (``#reactivemap``).
 
 The Python counterpart of ``lazily-rs/src/cell_family.rs``, the Lean
 ``LazilyFormal.Collection`` / ``Materialization`` formal models in
@@ -9,20 +9,20 @@ There is **one** keyed primitive, generic over the entry's **handle kind**
 (the axis Rust expresses as ``ReactiveMap<K, V, H>`` over the ``MapHandle``
 trait); the two specializations a binding exposes are the concrete types:
 
-- **:class:`CellMap` = ``ReactiveMap`` over the cell handle** — **input-cell**
-  entries. Adds cell-only :meth:`CellMap.set` (an input is settable) and eager
-  value-minting (:meth:`CellMap.entry` / :meth:`CellMap.entry_with`).
-- **:class:`SlotMap` = ``ReactiveMap`` over the slot handle** — **derived-slot**
+- **:class:`SourceMap` = ``ReactiveMap`` over the cell handle** — **input-cell**
+  entries. Adds cell-only :meth:`SourceMap.set` (an input is settable) and eager
+  value-minting (:meth:`SourceMap.entry` / :meth:`SourceMap.entry_with`).
+- **:class:`ComputedMap` = ``ReactiveMap`` over the slot handle** — **derived-slot**
   entries. :meth:`ReactiveMap.get_or_insert_with` mints a slot on first access
-  (**lazy materialization**); :meth:`SlotMap.materialize_all` pre-mints the
-  keyset (**eager**). A slot's value is derived, so ``SlotMap`` has **no
+  (**lazy materialization**); :meth:`ComputedMap.materialize_all` pre-mints the
+  keyset (**eager**). A slot's value is derived, so ``ComputedMap`` has **no
   ``set``**. There is **no eager/lazy mode flag** — eager is a pre-mint loop,
   lazy is mint-on-access.
 
 The shared surface — ``get_or_insert_with`` / ``remove`` / ``move_*`` /
 membership / order / ``keys`` / ``len`` / ``contains`` — lives on the generic
-:class:`ReactiveMap`. ``set`` and eager value-minting are the ``CellMap``-only
-specialization; the pre-mint eager helper is the ``SlotMap``-only specialization.
+:class:`ReactiveMap`. ``set`` and eager value-minting are the ``SourceMap``-only
+specialization; the pre-mint eager helper is the ``ComputedMap``-only specialization.
 
 Three independent reactive signals are exposed, mirroring ``lazily-rs``'s
 ``membership`` and ``order_signal`` cells:
@@ -54,7 +54,15 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
 
-__all__ = ["CellMap", "EntryKind", "MapHandle", "ReactiveMap", "SlotMap"]
+__all__ = [
+    "CellMap",
+    "ComputedMap",
+    "EntryKind",
+    "MapHandle",
+    "ReactiveMap",
+    "SlotMap",
+    "SourceMap",
+]
 
 K = TypeVar("K")
 V = TypeVar("V")
@@ -160,13 +168,13 @@ class ReactiveMap[K, V]:
     membership/order reader.
 
     Operations run against the owning ``ctx`` dict, like the rest of ``lazily``.
-    The two specializations a binding exposes are :class:`CellMap` (input cells)
-    and :class:`SlotMap` (derived slots). See the module docs.
+    The two specializations a binding exposes are :class:`SourceMap` (input cells)
+    and :class:`ComputedMap` (derived slots). See the module docs.
 
     Mirrors ``lazily-rs/src/cell_family.rs``'s ``ReactiveMap<K, V, H>``.
     """
 
-    #: The entry handle kind — set by the :class:`CellMap` / :class:`SlotMap`
+    #: The entry handle kind — set by the :class:`SourceMap` / :class:`ComputedMap`
     #: specialization. The generic base defaults to the cell handle.
     _HANDLE: _HandleKind = _CELL_HANDLE
 
@@ -212,8 +220,8 @@ class ReactiveMap[K, V]:
 
     @property
     def entry_kind(self) -> EntryKind:
-        """This map's entry kind (:attr:`EntryKind.CELL` for a :class:`CellMap`,
-        :attr:`EntryKind.SLOT` for a :class:`SlotMap`)."""
+        """This map's entry kind (:attr:`EntryKind.CELL` for a :class:`SourceMap`,
+        :attr:`EntryKind.SLOT` for a :class:`ComputedMap`)."""
         return self._HANDLE.KIND
 
     # -- internals ------------------------------------------------------ #
@@ -248,8 +256,8 @@ class ReactiveMap[K, V]:
         self, key: K, factory: Callable[[Any, K], V], ctx: Any = None
     ) -> V:
         """Get the value at ``key``, minting the entry via ``factory(view, key)``
-        first if absent — the mint-on-access recipe. For a :class:`SlotMap` this
-        is the **lazy materialization** pull; for a :class:`CellMap` it seeds an
+        first if absent — the mint-on-access recipe. For a :class:`ComputedMap` this
+        is the **lazy materialization** pull; for a :class:`SourceMap` it seeds an
         input cell. Bumps reactive membership only on insert; an existing key
         returns its current value without re-running the factory.
 
@@ -412,13 +420,13 @@ class ReactiveMap[K, V]:
         return self.move_to(key, target)
 
 
-class CellMap[K, V](ReactiveMap[K, V]):
+class SourceMap[K, V](ReactiveMap[K, V]):
     """A keyed **input-cell** collection: every entry is a settable :class:`Cell`.
 
-    The ``CellMap`` specialization of :class:`ReactiveMap` adds cell-only
+    The ``SourceMap`` specialization of :class:`ReactiveMap` adds cell-only
     :meth:`set` and eager value-minting (:meth:`entry` / :meth:`entry_with`) on
     top of the shared reactive keyed surface. Mirrors ``lazily-rs``'s
-    ``CellMap<K, V> = ReactiveMap<K, V, CellHandle<V>>``.
+    ``SourceMap<K, V> = ReactiveMap<K, V, CellHandle<V>>``.
     """
 
     __slots__ = ()
@@ -446,7 +454,7 @@ class CellMap[K, V](ReactiveMap[K, V]):
         """Set the value at ``key``, inserting a new entry (and bumping
         membership) if it does not exist yet. Updating an existing entry leaves
         membership untouched and invalidates only that entry's dependents.
-        Cell-only: an input is settable; a derived :class:`SlotMap` slot is not."""
+        Cell-only: an input is settable; a derived :class:`ComputedMap` slot is not."""
         handle = self._entries.get(key)
         if handle is not None:
             handle.set(value)  # type: ignore[union-attr]
@@ -454,12 +462,12 @@ class CellMap[K, V](ReactiveMap[K, V]):
         self.entry_with(key, lambda: value)
 
 
-class SlotMap[K, V](ReactiveMap[K, V]):
+class ComputedMap[K, V](ReactiveMap[K, V]):
     """A keyed **derived-slot** collection: every entry is a :class:`slot` whose
     value is derived. :meth:`ReactiveMap.get_or_insert_with` mints a slot on first
     access (lazy materialization); :meth:`materialize_all` pre-mints the keyset
-    (eager). A slot's value is derived, so ``SlotMap`` has **no ``set``**. Mirrors
-    ``lazily-rs``'s ``SlotMap<K, V> = ReactiveMap<K, V, SlotHandle<V>>``.
+    (eager). A slot's value is derived, so ``ComputedMap`` has **no ``set``**. Mirrors
+    ``lazily-rs``'s ``ComputedMap<K, V> = ReactiveMap<K, V, SlotHandle<V>>``.
     """
 
     __slots__ = ()
@@ -476,3 +484,19 @@ class SlotMap[K, V](ReactiveMap[K, V]):
         a factory reading a reactive node value-threads (``#lzcellkernel``)."""
         for key in keys:
             self.get_or_insert_with(key, factory)
+
+
+# ---------------------------------------------------------------------------
+# Deprecated aliases (v2 kernel rename)
+# ---------------------------------------------------------------------------
+# The v2 kernel renamed the node kinds to ``Source`` and ``Computed``; the map
+# names still said ``Cell`` / ``Slot``, a vocabulary the kernel no longer uses.
+# The old names stay as plain aliases so existing imports keep working — a
+# rename is not a removal. Importing them from the ``lazily`` package root emits
+# a :class:`DeprecationWarning` (see ``lazily/__init__.py``); the submodule
+# aliases below are the un-warned escape hatch.
+
+#: Deprecated alias of :class:`SourceMap`.
+CellMap = SourceMap
+#: Deprecated alias of :class:`ComputedMap`.
+SlotMap = ComputedMap

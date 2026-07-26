@@ -1,4 +1,4 @@
-"""``AsyncCellMap`` / ``AsyncSlotMap`` tests (``#reactivemap``, async flavor).
+"""``AsyncSourceMap`` / ``AsyncComputedMap`` tests (``#reactivemap``, async flavor).
 
 Mirrors the ``lazily-rs`` ``async_reactive_family.rs`` unit tests. Exercises the
 same materialization laws as the single-threaded map plus **eventual
@@ -12,19 +12,19 @@ from __future__ import annotations
 
 import asyncio
 
-from lazily import AsyncCellMap, AsyncSlotMap, Cell, EntryKind
+from lazily import AsyncComputedMap, AsyncSourceMap, Cell, EntryKind
 
 
-def test_eager_slot_map_materializes_all_up_front() -> None:
-    fam: AsyncSlotMap[int, int] = AsyncSlotMap({})
+def test_eager_computed_map_materializes_all_up_front() -> None:
+    fam: AsyncComputedMap[int, int] = AsyncComputedMap({})
     fam.materialize_all([0, 1, 2, 5, 9], lambda _c, k: k * 3)
     assert fam.present_count() == 5
     assert all(fam.is_present(k) for k in (0, 1, 2, 5, 9))
     assert fam.entry_kind is EntryKind.SLOT
 
 
-def test_lazy_slot_map_defers_until_read() -> None:
-    fam: AsyncSlotMap[int, int] = AsyncSlotMap({})
+def test_lazy_computed_map_defers_until_read() -> None:
+    fam: AsyncComputedMap[int, int] = AsyncComputedMap({})
     assert fam.present_count() == 0
     assert not fam.is_present(5)
     # Minting a slot materializes the entry but it is still pending.
@@ -36,7 +36,7 @@ def test_lazy_slot_map_defers_until_read() -> None:
 
 def test_observe_pending_is_none_then_resolves() -> None:
     async def scenario() -> None:
-        fam: AsyncSlotMap[int, int] = AsyncSlotMap({})
+        fam: AsyncComputedMap[int, int] = AsyncComputedMap({})
         fam.materialize_all([1, 2, 3], lambda _c, k: k * 10)
         # Pending before drive: non-blocking observe is None (never a stale value).
         assert fam.observe(2) is None
@@ -51,16 +51,16 @@ def test_observe_pending_is_none_then_resolves() -> None:
 def test_async_resolved_matches_sync() -> None:
     async def scenario() -> None:
         keys = [0, 1, 2, 5, 9]
-        fam: AsyncSlotMap[int, int] = AsyncSlotMap({})
+        fam: AsyncComputedMap[int, int] = AsyncComputedMap({})
         for k in keys:
             assert await fam.resolve(k, lambda _c, k: k * 3) == k * 3
 
     asyncio.run(scenario())
 
 
-def test_cell_map_is_always_resolved() -> None:
+def test_source_map_is_always_resolved() -> None:
     async def scenario() -> None:
-        fam: AsyncCellMap[str, int] = AsyncCellMap({})
+        fam: AsyncSourceMap[str, int] = AsyncSourceMap({})
         fam.set("a", 7)
         fam.set("b", 7)
         assert fam.entry_kind is EntryKind.CELL
@@ -71,8 +71,8 @@ def test_cell_map_is_always_resolved() -> None:
     asyncio.run(scenario())
 
 
-def test_cell_map_entries_are_writable_inputs() -> None:
-    fam: AsyncCellMap[int, int] = AsyncCellMap({})
+def test_source_map_entries_are_writable_inputs() -> None:
+    fam: AsyncSourceMap[int, int] = AsyncSourceMap({})
     fam.set(7, 7)
     handle = fam.handle(7)
     assert isinstance(handle, Cell)
@@ -81,7 +81,7 @@ def test_cell_map_entries_are_writable_inputs() -> None:
 
 
 def test_present_set_is_monotone_across_reads() -> None:
-    fam: AsyncSlotMap[int, int] = AsyncSlotMap({})
+    fam: AsyncComputedMap[int, int] = AsyncComputedMap({})
     sizes = []
     for k in (2, 4, 2, 5):
         fam.get_or_insert_handle(k, lambda _c, k: k * 2)
@@ -91,7 +91,7 @@ def test_present_set_is_monotone_across_reads() -> None:
 
 
 def test_stable_handle_across_repeated_get() -> None:
-    fam: AsyncSlotMap[int, int] = AsyncSlotMap({})
+    fam: AsyncComputedMap[int, int] = AsyncComputedMap({})
     assert fam.get_or_insert_handle(3, lambda _c, k: k) is fam.get_or_insert_handle(
         3, lambda _c, k: k
     )

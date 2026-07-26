@@ -1,7 +1,7 @@
 {
-  "description": "SlotMap materialization (#lzmatmode) observational transparency: a keyed SlotMap of derived slots built eager vs. lazy MUST return identical values for every key (observe_canonical / eager_lazy_observationally_equivalent). Materialization changes allocation timing and memory, never observed values. `spec.val` is each derived key's canonical value; `reads` is the sequence a lazy session pulls. The eager build (pre-mint loop) materializes every key up front (eager_materializes_all); the lazy build (get_or_insert_with mint-on-access) materializes only the read keys (lazy_defers_slots). The default strategy is eager (default_mode_eager).",
-  "kind": "SlotMap",
-  "model": "SlotMap",
+  "description": "ComputedMap materialization (#lzmatmode) observational transparency: a keyed ComputedMap of derived slots built eager vs. lazy MUST return identical values for every key (observe_canonical / eager_lazy_observationally_equivalent). Materialization changes allocation timing and memory, never observed values. `spec.val` is each derived key's canonical value; `reads` is the sequence a lazy session pulls. The eager build (pre-mint loop) materializes every key up front (eager_materializes_all); the lazy build (get_or_insert_with mint-on-access) materializes only the read keys (lazy_defers_slots). The default strategy is eager (default_mode_eager).",
+  "kind": "ComputedMap",
+  "model": "ComputedMap",
   "spec": {
     "val": {
       "0": 0,

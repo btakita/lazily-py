@@ -526,7 +526,7 @@ class QueueCell[T]:
         """Snapshot the buffered elements in FIFO order. Non-reactive — for
         debugging, snapshot/serde, and conformance-fixture verification. There
         is no reactive random-access ``queue[N]`` reader; per-position
-        reactivity is the domain of :class:`~lazily.collection.CellMap`, not
+        reactivity is the domain of :class:`~lazily.collection.SourceMap`, not
         :class:`QueueCell`."""
         storage = self._storage
         getter: Callable[[], list[T]] | None = getattr(storage, "elements", None)

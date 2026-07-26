@@ -1,10 +1,10 @@
-"""``SlotMap`` / ``CellMap`` materialization tests (``#reactivemap``).
+"""``ComputedMap`` / ``SourceMap`` materialization tests (``#reactivemap``).
 
 Mirrors the ``lazily-rs`` ``cell_family.rs`` unit tests and the
 ``materialization_conformance.rs`` harness, driven by the canonical fixtures in
-``lazily-spec/conformance/materialization/`` (now ``"model": "SlotMap"``).
+``lazily-spec/conformance/materialization/`` (now ``"model": "ComputedMap"``).
 Exercises the laws proved in ``lazily-formal``'s ``Materialization`` module
-against the Python :class:`~lazily.SlotMap` specialization of
+against the Python :class:`~lazily.ComputedMap` specialization of
 :class:`~lazily.ReactiveMap`: observational transparency (eager pre-mint vs lazy
 mint-on-access), deferral-not-deallocation present-set monotonicity, and
 entry-kind orthogonal to strategy (input cells always materialized / derived
@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from lazily import CellMap, EntryKind, SlotMap
+from lazily import ComputedMap, EntryKind, SourceMap
 
 
 _LOCAL_FIXTURES = Path(__file__).resolve().parent / "conformance" / "materialization"
@@ -30,6 +30,13 @@ _SPEC_FIXTURES = (
     / "conformance"
     / "materialization"
 )
+
+#: Accepted spellings of the derived-map ``kind`` / ``model`` wire fields.
+#: ``SlotMap`` is the DEPRECATED spelling of ``ComputedMap`` — the field is wire
+#: data shared by nine independent bindings, so a runner MUST keep accepting the
+#: old spelling while the other bindings migrate. Only the new spelling is
+#: emitted; the vendored fixtures carry ``ComputedMap``.
+_COMPUTED_MAP_MODELS = frozenset({"ComputedMap", "SlotMap"})
 
 
 def load_fixture(name: str) -> dict:
@@ -50,16 +57,16 @@ def _ctx_factory(fn):
 # ---------------------------------------------------------------------------
 
 
-def test_eager_slot_map_materializes_all_up_front() -> None:
-    fam: SlotMap[int, int] = SlotMap({})
+def test_eager_computed_map_materializes_all_up_front() -> None:
+    fam: ComputedMap[int, int] = ComputedMap({})
     fam.materialize_all([0, 1, 2, 5, 9], lambda _c, k: k * 3)
     assert fam.present_count() == 5
     assert all(fam.is_present(k) for k in (0, 1, 2, 5, 9))
     assert fam.entry_kind is EntryKind.SLOT
 
 
-def test_lazy_slot_map_defers_until_read() -> None:
-    fam: SlotMap[int, int] = SlotMap({})
+def test_lazy_computed_map_defers_until_read() -> None:
+    fam: ComputedMap[int, int] = ComputedMap({})
     assert fam.present_count() == 0
     assert not fam.is_present(5)
     # First read mints just that key ("materialize on pull").
@@ -69,15 +76,15 @@ def test_lazy_slot_map_defers_until_read() -> None:
 
 
 def test_eager_and_lazy_observe_identically() -> None:
-    eager: SlotMap[int, int] = SlotMap({})
+    eager: ComputedMap[int, int] = ComputedMap({})
     eager.materialize_all([0, 1, 2, 5, 9], lambda _c, k: k * 3)
-    lazy: SlotMap[int, int] = SlotMap({})
+    lazy: ComputedMap[int, int] = ComputedMap({})
     for k in (0, 1, 2, 5, 9):
         assert eager.get(k) == lazy.get_or_insert_with(k, lambda _c, k: k * 3)
 
 
 def test_present_set_is_monotone_across_reads() -> None:
-    fam: SlotMap[int, int] = SlotMap({})
+    fam: ComputedMap[int, int] = ComputedMap({})
     sizes = []
     for k in (2, 4, 2, 5):
         fam.get_or_insert_with(k, lambda _c, k: k * 2)
@@ -88,7 +95,7 @@ def test_present_set_is_monotone_across_reads() -> None:
 
 
 def test_get_or_insert_with_mints_once_then_returns_existing() -> None:
-    fam: SlotMap[str, int] = SlotMap({})
+    fam: ComputedMap[str, int] = ComputedMap({})
     calls = [0]
 
     def factory(_c: object, _k: str) -> int:
@@ -102,8 +109,8 @@ def test_get_or_insert_with_mints_once_then_returns_existing() -> None:
     assert calls[0] == 1
 
 
-def test_cell_map_entries_are_writable_inputs() -> None:
-    fam: CellMap[int, int] = CellMap({})
+def test_source_map_entries_are_writable_inputs() -> None:
+    fam: SourceMap[int, int] = SourceMap({})
     handle = fam.entry(7, 7)
     assert handle.get() == 7
     assert fam.entry_kind is EntryKind.CELL
@@ -111,8 +118,8 @@ def test_cell_map_entries_are_writable_inputs() -> None:
     assert fam.get(7) == 100
 
 
-def test_cell_map_set_seeds_and_updates() -> None:
-    fam: CellMap[str, int] = CellMap({})
+def test_source_map_set_seeds_and_updates() -> None:
+    fam: SourceMap[str, int] = SourceMap({})
     fam.set("a", 1)
     assert fam.present_count() == 1
     fam.set("a", 42)  # existing entry: no membership change
@@ -127,7 +134,7 @@ def test_observe_is_reactive_when_factory_reads_a_cell() -> None:
 
     ctx: dict = {}
     src = Cell(ctx, 10)
-    fam: SlotMap[int, int] = SlotMap(ctx)
+    fam: ComputedMap[int, int] = ComputedMap(ctx)
     fam.materialize_all([1], lambda c, k: c.read(src) + k)
     seen = []
 
@@ -151,7 +158,7 @@ def _val_lookup(spec_val: dict) -> dict[str, int]:
 
 def _check_val_fixture(name: str) -> dict:
     fixture = load_fixture(name)
-    assert fixture["kind"] == "SlotMap"
+    assert fixture["kind"] in _COMPUTED_MAP_MODELS
     expected = fixture["expected"]
     # default_mode_eager: eager is the default materialization strategy.
     assert expected["default_mode"] == "eager"
@@ -161,9 +168,9 @@ def _check_val_fixture(name: str) -> dict:
     lookup = _ctx_factory(vals.__getitem__)
 
     # eager: pre-mint the whole keyset; lazy: empty, mint-on-access.
-    eager: SlotMap[str, int] = SlotMap({})
+    eager: ComputedMap[str, int] = ComputedMap({})
     eager.materialize_all(keys, lookup)
-    lazy: SlotMap[str, int] = SlotMap({})
+    lazy: ComputedMap[str, int] = ComputedMap({})
 
     # eager_materializes_all
     assert eager.present_count() == len(keys)
@@ -184,7 +191,7 @@ def test_conformance_observational_transparency() -> None:
     expected = fixture["expected"]
 
     vals = _val_lookup(fixture["spec"]["val"])
-    lazy: SlotMap[str, int] = SlotMap({})
+    lazy: ComputedMap[str, int] = ComputedMap({})
     for k in fixture["reads"]:
         lazy.get_or_insert_with(k, _ctx_factory(vals.__getitem__))
     assert set(lazy.present_keys()) == set(expected["lazy_present_after_reads"])
@@ -195,7 +202,7 @@ def test_conformance_deferral_not_deallocation() -> None:
     expected = fixture["expected"]
 
     vals = _val_lookup(fixture["spec"]["val"])
-    lazy: SlotMap[str, int] = SlotMap({})
+    lazy: ComputedMap[str, int] = ComputedMap({})
 
     got_sizes = []
     for k in fixture["reads"]:
@@ -218,17 +225,17 @@ def test_conformance_entry_kind_orthogonal_to_mode() -> None:
     slot_keys = [k for k, e in entries.items() if e["kind"] == "slot"]
     vals = {k: int(e["val"]) for k, e in entries.items()}
     # ``lookup`` is used both directly as a value producer (``lookup(k)`` to seed
-    # a CellMap entry) and as a family factory; keep it 1-arg and wrap it with
+    # a SourceMap entry) and as a family factory; keep it 1-arg and wrap it with
     # :func:`_ctx_factory` only at the family call sites (the ctx-param contract).
     lookup = vals.__getitem__
 
     # A single ReactiveMap fixes one handle kind, so a mixed-kind fixture is
-    # modelled by a CellMap over the cell entries and a SlotMap over the slot
+    # modelled by a SourceMap over the cell entries and a ComputedMap over the slot
     # entries — sharing one logical key space.
-    eager_cells: CellMap[str, int] = CellMap({})
+    eager_cells: SourceMap[str, int] = SourceMap({})
     for k in cell_keys:
         eager_cells.entry(k, lookup(k))
-    eager_slots: SlotMap[str, int] = SlotMap({})
+    eager_slots: ComputedMap[str, int] = ComputedMap({})
     eager_slots.materialize_all(slot_keys, _ctx_factory(lookup))
     assert eager_cells.entry_kind is EntryKind.CELL
     assert eager_slots.entry_kind is EntryKind.SLOT
@@ -236,10 +243,10 @@ def test_conformance_entry_kind_orthogonal_to_mode() -> None:
     assert eager_present == set(expected["eager_present"])
 
     # Lazy build: cells present at build (always materialized), slots deferred.
-    lazy_cells: CellMap[str, int] = CellMap({})
+    lazy_cells: SourceMap[str, int] = SourceMap({})
     for k in cell_keys:
         lazy_cells.entry(k, lookup(k))
-    lazy_slots: SlotMap[str, int] = SlotMap({})
+    lazy_slots: ComputedMap[str, int] = ComputedMap({})
     assert set(lazy_cells.present_keys()) == set(expected["lazy_present_at_build"])
     assert lazy_slots.present_keys() == []
 
@@ -269,8 +276,8 @@ def test_conformance_entry_kind_orthogonal_to_mode() -> None:
         "entry_kind_orthogonal_to_mode.json",
     ],
 )
-def test_fixture_loads_and_is_slot_map(name: str) -> None:
+def test_fixture_loads_and_is_computed_map(name: str) -> None:
     fixture = load_fixture(name)
-    assert fixture["kind"] == "SlotMap"
-    assert fixture["model"] == "SlotMap"
+    assert fixture["kind"] in _COMPUTED_MAP_MODELS
+    assert fixture["model"] in _COMPUTED_MAP_MODELS
     assert fixture["expected"]["default_mode"] == "eager"

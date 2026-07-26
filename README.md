@@ -67,15 +67,15 @@ notes and platform carve-outs lives in
 | Feature | Rust | Python | Kotlin | JS | Dart | Zig | Go | C++ | C# |
 | --------- | :----: | :------: | :------: | :--: | :----: | :---: | :--: | :---: | :--: |
 | Reactive graph — two cell kinds (nodes `SourceCell` / `ComputedCell`; handles `Source<T, M>` / `Computed<T>`) + `Effect` sink + eager `Computed` (`computed().eager()`) / all cells guarded / batch | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Keyed-map materialization (`SlotMap`) — mint-on-access derived slots: transparency + deferral (`#lzmatmode`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Thread-safe keyed map (`ThreadSafeSlotMap`) — `Send + Sync` + materialization confluence (`#lzmatmode`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Async keyed map (`AsyncSlotMap`) — eventual transparency (`#lzmatmode`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Keyed-map materialization (`ComputedMap`) — mint-on-access derived slots: transparency + deferral (`#lzmatmode`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Thread-safe keyed map (`ThreadSafeComputedMap`) — `Send + Sync` + materialization confluence (`#lzmatmode`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Async keyed map (`AsyncComputedMap`) — eventual transparency (`#lzmatmode`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Keyed-map sync — membership propagation + materialize-on-ingest + derived-aggregate transparency (`#lzfamilysync`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Thread-safe context (lock-backed) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Async reactive context | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Flat state machine | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Harel state charts | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Keyed reactive maps (`ReactiveMap`: `CellMap` / `SlotMap`) + `CellTree` + reconcile | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Keyed reactive maps (`ReactiveMap`: `SourceMap` / `ComputedMap`) + `CellTree` + reconcile | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Memoized semantic tree (`SemTree`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Stable-id alignment (manufactured identity) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Reactive queue (`QueueCell` SPSC/MPSC + `QueueStorage` adapter) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
@@ -278,10 +278,10 @@ self-transition to an equal state is accepted but suppressed by the Cell's
 lazily-py also implements the `lazily-spec` compute-layer `MUST`s, each ported
 from its Lean formal model in [`lazily-formal`](https://github.com/lazily-hub/lazily-formal):
 
-- **`ReactiveMap` / `CellMap` / `SlotMap` / `CellTree`** — keyed reactive
+- **`ReactiveMap` / `SourceMap` / `ComputedMap` / `CellTree`** — keyed reactive
   collections (`#reactivemap`) with independent value/membership/order signals and
-  atomic move. One generic `ReactiveMap` over a handle kind; `CellMap` (input
-  cells, adds `set` + eager `entry`) and `SlotMap` (derived slots, lazy
+  atomic move. One generic `ReactiveMap` over a handle kind; `SourceMap` (input
+  cells, adds `set` + eager `entry`) and `ComputedMap` (derived slots, lazy
   `get_or_insert_with` + eager `materialize_all`) are its specializations.
 - **`QueueCell`** — a reactive FIFO queue (SPSC primitive with an MPSC-via-`batch`
   usage rule) with a pluggable `QueueStorage` backend. Reader-kind invalidation
@@ -509,7 +509,7 @@ validates against `lazily-spec`'s `message-passing.json`, and all eight
 ## Benchmarks
 
 Wall-clock benchmarks live in [`BENCHMARKS.md`](BENCHMARKS.md), covering both
-the in-library micro-suite (reactive core, keyed reconciliation, `CellMap`,
+the in-library micro-suite (reactive core, keyed reconciliation, `SourceMap`,
 `TextCrdt`, CRDT plane) and a large spreadsheet-shaped **scale** suite that
 mirrors the lazily-rs / lazily-go `scale` groups (`N` input cells + `N` formula
 slots, `formula[i] = input[i] + input[i-1]`). The scale suite is measured up to

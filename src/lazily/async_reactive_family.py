@@ -8,10 +8,10 @@ The Python counterpart of ``lazily-rs/src/async_reactive_family.rs``, the Lean
 Keys ``K`` map to per-entry async reactive nodes: :attr:`EntryKind.CELL` input
 cells (:class:`~lazily.Cell`, always resolved) or :attr:`EntryKind.SLOT` derived
 slots (:class:`~lazily.AsyncSlot`, resolved **asynchronously**). Its two
-specializations are :class:`AsyncCellMap` (input cells) and :class:`AsyncSlotMap`
+specializations are :class:`AsyncSourceMap` (input cells) and :class:`AsyncComputedMap`
 (derived slots).
 
-Eager materialization is a pre-mint loop (:meth:`AsyncSlotMap.materialize_all`);
+Eager materialization is a pre-mint loop (:meth:`AsyncComputedMap.materialize_all`);
 lazy is mint-on-access (:meth:`AsyncReactiveMap.get_or_insert_handle`) — there is
 no eager/lazy mode flag. The transparency law here is **eventual**: a non-blocking
 :meth:`AsyncReactiveMap.observe` of a derived slot returns ``None`` while pending
@@ -36,8 +36,10 @@ if TYPE_CHECKING:
 
 __all__ = [
     "AsyncCellMap",
+    "AsyncComputedMap",
     "AsyncReactiveMap",
     "AsyncSlotMap",
+    "AsyncSourceMap",
 ]
 
 V = TypeVar("V")
@@ -50,8 +52,8 @@ class AsyncReactiveMap[K, V]:
     """The async keyed reactive collection (``#reactivemap``): keys map to
     per-entry async reactive nodes (:attr:`EntryKind.CELL` input cells resolved
     synchronously, or :attr:`EntryKind.SLOT` derived slots resolved
-    asynchronously). Its two specializations are :class:`AsyncCellMap` (input
-    cells) and :class:`AsyncSlotMap` (derived slots).
+    asynchronously). Its two specializations are :class:`AsyncSourceMap` (input
+    cells) and :class:`AsyncComputedMap` (derived slots).
 
     Input cells operate against the owning ``ctx`` dict (as the rest of
     ``lazily`` does); derived slots are :class:`~lazily.AsyncSlot`\\ s driven by
@@ -151,9 +153,9 @@ class AsyncReactiveMap[K, V]:
         return self._KIND
 
 
-class AsyncCellMap[K, V](AsyncReactiveMap[K, V]):
+class AsyncSourceMap[K, V](AsyncReactiveMap[K, V]):
     """An async **input-cell** map: every entry is an always-resolved
-    :class:`~lazily.Cell`. The async analog of :class:`~lazily.CellMap`. Adds
+    :class:`~lazily.Cell`. The async analog of :class:`~lazily.SourceMap`. Adds
     cell-only :meth:`set`."""
 
     __slots__ = ()
@@ -170,10 +172,10 @@ class AsyncCellMap[K, V](AsyncReactiveMap[K, V]):
         self._mint(key, lambda _view, _k: value)
 
 
-class AsyncSlotMap[K, V](AsyncReactiveMap[K, V]):
+class AsyncComputedMap[K, V](AsyncReactiveMap[K, V]):
     """An async **derived-slot** map: entries are :class:`~lazily.AsyncSlot` nodes
     resolved asynchronously, minted lazily on access or eagerly via
-    :meth:`materialize_all`. The async analog of :class:`~lazily.SlotMap`; a slot's
+    :meth:`materialize_all`. The async analog of :class:`~lazily.ComputedMap`; a slot's
     value is derived, so it has **no ``set``**."""
 
     __slots__ = ()
@@ -188,3 +190,17 @@ class AsyncSlotMap[K, V](AsyncReactiveMap[K, V]):
         ``factory(view, key)`` takes a compute view first (``#lzcellkernel``)."""
         for key in keys:
             self._mint(key, factory)
+
+
+# ---------------------------------------------------------------------------
+# Deprecated aliases (v2 kernel rename)
+# ---------------------------------------------------------------------------
+# See ``lazily/collection.py`` — the v2 kernel node kinds are ``Source`` and
+# ``Computed``; the old map names stay as plain aliases so existing imports keep
+# working. Importing them from the ``lazily`` package root emits a
+# :class:`DeprecationWarning`.
+
+#: Deprecated alias of :class:`AsyncSourceMap`.
+AsyncCellMap = AsyncSourceMap
+#: Deprecated alias of :class:`AsyncComputedMap`.
+AsyncSlotMap = AsyncComputedMap

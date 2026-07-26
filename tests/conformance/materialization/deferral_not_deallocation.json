@@ -1,7 +1,7 @@
 {
-  "description": "SlotMap materialization (#lzmatmode) memory laws: lazy materialization only *grows* the present set — a materialized node is never silently dropped (materialize_present_monotone) — and the lazy present set is a subset of the eager present set (lazy_present_subset_eager). Materializing one node never changes another's observed value (materialize_preserves_observe — no churn from allocation). After the `reads` sequence, `present_after_each_read` gives the cumulative present-set size observed after each read (monotonically non-decreasing, unchanged by re-reads), and `lazy_present_after_reads` is the final present set — a subset of `eager_present`.",
-  "kind": "SlotMap",
-  "model": "SlotMap",
+  "description": "ComputedMap materialization (#lzmatmode) memory laws: lazy materialization only *grows* the present set — a materialized node is never silently dropped (materialize_present_monotone) — and the lazy present set is a subset of the eager present set (lazy_present_subset_eager). Materializing one node never changes another's observed value (materialize_preserves_observe — no churn from allocation). After the `reads` sequence, `present_after_each_read` gives the cumulative present-set size observed after each read (monotonically non-decreasing, unchanged by re-reads), and `lazy_present_after_reads` is the final present set — a subset of `eager_present`.",
+  "kind": "ComputedMap",
+  "model": "ComputedMap",
   "spec": {
     "val": {
       "1": 2,

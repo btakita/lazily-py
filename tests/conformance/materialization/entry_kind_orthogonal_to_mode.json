@@ -1,7 +1,7 @@
 {
-  "description": "SlotMap entry kind (#lzmatmode) is orthogonal to materialization strategy: a keyed map's entries are input CELLS (EntryKind.cell — always materialized, any strategy) or derived SLOTS (EntryKind.slot — materialized eagerly, or lazily on first read). `spec.entries` gives each key's kind and canonical value. Under lazy, cell entries are present at build (`lazy_present_at_build`) while slot entries stay absent until read; under eager, all entries are present. Reads are strategy-independent. Proved as cell_entries_materialized_in_every_mode / slot_entries_deferred_under_lazy.",
-  "kind": "SlotMap",
-  "model": "SlotMap",
+  "description": "ComputedMap entry kind (#lzmatmode) is orthogonal to materialization strategy: a keyed map's entries are input CELLS (EntryKind.cell — always materialized, any strategy) or derived SLOTS (EntryKind.slot — materialized eagerly, or lazily on first read). `spec.entries` gives each key's kind and canonical value. Under lazy, cell entries are present at build (`lazy_present_at_build`) while slot entries stay absent until read; under eager, all entries are present. Reads are strategy-independent. Proved as cell_entries_materialized_in_every_mode / slot_entries_deferred_under_lazy.",
+  "kind": "ComputedMap",
+  "model": "ComputedMap",
   "spec": {
     "entries": {
       "in_a": { "kind": "cell", "val": 5 },
