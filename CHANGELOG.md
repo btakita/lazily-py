@@ -1,3 +1,13 @@
+## 0.37.1
+
+### Changed — docs
+
+- Synced the coverage table with `lazily-spec`: Rust now carries the
+  thread-safe and async flavors of the broadcast topic (`TopicCell`), the
+  competing-consumer work queue (`WorkQueueCell`), and the reactive queue
+  (`QueueCell`) Core surfaces. Python's own behaviour is unchanged — the
+  Python column on those six rows still reads `—`.
+
 ## 0.37.0
 
 ### Added
