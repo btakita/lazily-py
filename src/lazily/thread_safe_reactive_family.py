@@ -26,7 +26,13 @@ from __future__ import annotations
 import threading
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from .collection import _CELL_HANDLE, _SLOT_HANDLE, EntryKind, MapHandle, _HandleKind
+from .collection import (
+    _COMPUTED_HANDLE,
+    _SOURCE_HANDLE,
+    EntryKind,
+    MapHandle,
+    _HandleKind,
+)
 from .thread_safe import ThreadSafeContext
 
 
@@ -59,7 +65,7 @@ class ThreadSafeReactiveMap[K, V]:
     """
 
     #: The entry handle kind — set by the specialization.
-    _HANDLE: _HandleKind = _CELL_HANDLE
+    _HANDLE: _HandleKind = _SOURCE_HANDLE
 
     __slots__ = ("_ctx", "_materialized", "_mutex", "_order", "_ts")
 
@@ -171,7 +177,7 @@ class ThreadSafeSourceMap[K, V](ThreadSafeReactiveMap[K, V]):
 
     __slots__ = ()
 
-    _HANDLE = _CELL_HANDLE
+    _HANDLE = _SOURCE_HANDLE
 
     def set(self, key: K, value: V) -> None:
         """Set the value at ``key`` through the coalescing context, inserting a
@@ -192,7 +198,7 @@ class ThreadSafeComputedMap[K, V](ThreadSafeReactiveMap[K, V]):
 
     __slots__ = ()
 
-    _HANDLE = _SLOT_HANDLE
+    _HANDLE = _COMPUTED_HANDLE
 
     def materialize_all(
         self, keys: Iterable[K], factory: Callable[[Any, K], V]

@@ -1,13 +1,13 @@
 {
-  "description": "ComputedMap entry kind (#lzmatmode) is orthogonal to materialization strategy: a keyed map's entries are input CELLS (EntryKind.cell — always materialized, any strategy) or derived SLOTS (EntryKind.slot — materialized eagerly, or lazily on first read). `spec.entries` gives each key's kind and canonical value. Under lazy, cell entries are present at build (`lazy_present_at_build`) while slot entries stay absent until read; under eager, all entries are present. Reads are strategy-independent. Proved as cell_entries_materialized_in_every_mode / slot_entries_deferred_under_lazy.",
+  "description": "ComputedMap entry kind (#lzmatmode) is orthogonal to materialization strategy: a keyed map's entries are input SOURCES (EntryKind.source — always materialized, any strategy) or derived COMPUTEDS (EntryKind.computed — materialized eagerly, or lazily on first read). `spec.entries` gives each key's kind and canonical value. Under lazy, source entries are present at build (`lazy_present_at_build`) while computed entries stay absent until read; under eager, all entries are present. Reads are strategy-independent. Proved as source_entries_materialized_in_every_mode / computed_entries_deferred_under_lazy.",
   "kind": "ComputedMap",
   "model": "ComputedMap",
   "spec": {
     "entries": {
-      "in_a": { "kind": "cell", "val": 5 },
-      "in_b": { "kind": "cell", "val": 7 },
-      "der_x": { "kind": "slot", "val": 12 },
-      "der_y": { "kind": "slot", "val": 35 }
+      "in_a": { "kind": "source", "val": 5 },
+      "in_b": { "kind": "source", "val": 7 },
+      "der_x": { "kind": "computed", "val": 12 },
+      "der_y": { "kind": "computed", "val": 35 }
     }
   },
   "reads": ["der_x"],

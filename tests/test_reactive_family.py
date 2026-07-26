@@ -38,6 +38,37 @@ _SPEC_FIXTURES = (
 #: emitted; the vendored fixtures carry ``ComputedMap``.
 _COMPUTED_MAP_MODELS = frozenset({"ComputedMap", "SlotMap"})
 
+#: Accepted spellings of a fixture **entry**'s ``kind`` field -> the
+#: :class:`EntryKind` it denotes. ``"cell"`` / ``"slot"`` are the current
+#: canonical fixture spelling and the enum's (unchanged) member VALUES;
+#: ``"source"`` / ``"computed"`` are the v2 spelling the canonical corpus will
+#: flip to. The field is wire data nine independent bindings read, so a runner
+#: MUST accept both while the corpus and the other bindings migrate. Anything
+#: else is a hard error — never a silent default or skip.
+_ENTRY_KIND_SPELLINGS = {
+    "cell": EntryKind.SOURCE,
+    "source": EntryKind.SOURCE,
+    "slot": EntryKind.COMPUTED,
+    "computed": EntryKind.COMPUTED,
+}
+
+
+def entry_kind_of(entry: dict) -> EntryKind:
+    """The :class:`EntryKind` a fixture entry declares, accepting both the old
+    (``cell`` / ``slot``) and new (``source`` / ``computed``) spellings.
+
+    An unrecognized spelling fails the run: a fixture the binding cannot read is
+    a conformance failure, not something to default or skip past.
+    """
+    spelling = entry["kind"]
+    kind = _ENTRY_KIND_SPELLINGS.get(spelling)
+    if kind is None:
+        raise AssertionError(
+            f"unknown fixture entry kind {spelling!r}; expected one of "
+            f"{sorted(_ENTRY_KIND_SPELLINGS)}"
+        )
+    return kind
+
 
 def load_fixture(name: str) -> dict:
     spec_path = _SPEC_FIXTURES / name
@@ -62,7 +93,7 @@ def test_eager_computed_map_materializes_all_up_front() -> None:
     fam.materialize_all([0, 1, 2, 5, 9], lambda _c, k: k * 3)
     assert fam.present_count() == 5
     assert all(fam.is_present(k) for k in (0, 1, 2, 5, 9))
-    assert fam.entry_kind is EntryKind.SLOT
+    assert fam.entry_kind is EntryKind.COMPUTED
 
 
 def test_lazy_computed_map_defers_until_read() -> None:
@@ -113,7 +144,7 @@ def test_source_map_entries_are_writable_inputs() -> None:
     fam: SourceMap[int, int] = SourceMap({})
     handle = fam.entry(7, 7)
     assert handle.get() == 7
-    assert fam.entry_kind is EntryKind.CELL
+    assert fam.entry_kind is EntryKind.SOURCE
     handle.set(100)
     assert fam.get(7) == 100
 
@@ -221,8 +252,10 @@ def test_conformance_entry_kind_orthogonal_to_mode() -> None:
     assert expected["default_mode"] == "eager"
 
     entries = fixture["spec"]["entries"]
-    cell_keys = [k for k, e in entries.items() if e["kind"] == "cell"]
-    slot_keys = [k for k, e in entries.items() if e["kind"] == "slot"]
+    cell_keys = [k for k, e in entries.items() if entry_kind_of(e) is EntryKind.SOURCE]
+    slot_keys = [
+        k for k, e in entries.items() if entry_kind_of(e) is EntryKind.COMPUTED
+    ]
     vals = {k: int(e["val"]) for k, e in entries.items()}
     # ``lookup`` is used both directly as a value producer (``lookup(k)`` to seed
     # a SourceMap entry) and as a family factory; keep it 1-arg and wrap it with
@@ -237,8 +270,8 @@ def test_conformance_entry_kind_orthogonal_to_mode() -> None:
         eager_cells.entry(k, lookup(k))
     eager_slots: ComputedMap[str, int] = ComputedMap({})
     eager_slots.materialize_all(slot_keys, _ctx_factory(lookup))
-    assert eager_cells.entry_kind is EntryKind.CELL
-    assert eager_slots.entry_kind is EntryKind.SLOT
+    assert eager_cells.entry_kind is EntryKind.SOURCE
+    assert eager_slots.entry_kind is EntryKind.COMPUTED
     eager_present = set(eager_cells.present_keys()) | set(eager_slots.present_keys())
     assert eager_present == set(expected["eager_present"])
 
@@ -281,3 +314,57 @@ def test_fixture_loads_and_is_computed_map(name: str) -> None:
     assert fixture["kind"] in _COMPUTED_MAP_MODELS
     assert fixture["model"] in _COMPUTED_MAP_MODELS
     assert fixture["expected"]["default_mode"] == "eager"
+
+
+# ---------------------------------------------------------------------------
+# Fixture wire-format forward compatibility (``kind``: cell/slot -> source/computed)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("spelling", "expected"),
+    [
+        ("cell", EntryKind.SOURCE),
+        ("source", EntryKind.SOURCE),
+        ("slot", EntryKind.COMPUTED),
+        ("computed", EntryKind.COMPUTED),
+    ],
+)
+def test_entry_kind_accepts_old_and_new_fixture_spellings(
+    spelling: str, expected: EntryKind
+) -> None:
+    assert entry_kind_of({"kind": spelling, "val": 1}) is expected
+
+
+@pytest.mark.parametrize("spelling", ["", "Cell", "memo", "signal", "cells"])
+def test_unknown_entry_kind_spelling_is_a_hard_error(spelling: str) -> None:
+    # No silent default, no skip: an unreadable fixture fails the run.
+    with pytest.raises(AssertionError, match="unknown fixture entry kind"):
+        entry_kind_of({"kind": spelling, "val": 1})
+
+
+def test_entry_kind_orthogonal_fixture_partitions_under_the_new_spelling() -> None:
+    # The canonical fixture will later flip `kind` to source/computed; the
+    # partition the runner builds must be identical either way. The fixture
+    # itself lives in lazily-spec and is NOT edited here — this re-spells a
+    # loaded copy in memory.
+    fixture = load_fixture("entry_kind_orthogonal_to_mode.json")
+    entries = fixture["spec"]["entries"]
+    flipped = {
+        "cell": "source",
+        "slot": "computed",
+        "source": "source",
+        "computed": "computed",
+    }
+    respelled = {k: {**e, "kind": flipped[e["kind"]]} for k, e in entries.items()}
+
+    def partition(src: dict) -> tuple[list[str], list[str]]:
+        return (
+            [k for k, e in src.items() if entry_kind_of(e) is EntryKind.SOURCE],
+            [k for k, e in src.items() if entry_kind_of(e) is EntryKind.COMPUTED],
+        )
+
+    assert partition(respelled) == partition(entries)
+    # Guard against a vacuous pass: the fixture really does carry both kinds.
+    sources, computeds = partition(entries)
+    assert sources and computeds

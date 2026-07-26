@@ -20,7 +20,7 @@ def test_eager_computed_map_materializes_all_up_front() -> None:
     fam.materialize_all([0, 1, 2, 5, 9], lambda _c, k: k * 3)
     assert fam.present_count() == 5
     assert all(fam.is_present(k) for k in (0, 1, 2, 5, 9))
-    assert fam.entry_kind is EntryKind.SLOT
+    assert fam.entry_kind is EntryKind.COMPUTED
 
 
 def test_lazy_computed_map_defers_until_read() -> None:
@@ -63,7 +63,7 @@ def test_source_map_is_always_resolved() -> None:
         fam: AsyncSourceMap[str, int] = AsyncSourceMap({})
         fam.set("a", 7)
         fam.set("b", 7)
-        assert fam.entry_kind is EntryKind.CELL
+        assert fam.entry_kind is EntryKind.SOURCE
         # Input cells resolve at build — observe is immediate, not None.
         assert fam.observe("a") == 7
         assert await fam.resolve("b", lambda _c, _k: 7) == 7

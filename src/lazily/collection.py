@@ -42,8 +42,9 @@ re-mint).
 
 from __future__ import annotations
 
+import warnings
 from abc import ABC, abstractmethod
-from enum import Enum
+from enum import Enum, EnumMeta
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from .cell import Cell
@@ -72,30 +73,69 @@ V = TypeVar("V")
 type MapHandle = Cell | Slot
 
 
-class EntryKind(Enum):
+#: Deprecated :class:`EntryKind` member name -> its current name. The v2 kernel
+#: renamed the node kinds to ``Source`` and ``Computed``; the member names follow
+#: (the member **values** do not — see :class:`EntryKind`).
+_DEPRECATED_ENTRY_KINDS = {
+    "CELL": "SOURCE",
+    "SLOT": "COMPUTED",
+}
+
+
+class _EntryKindMeta(EnumMeta):
+    """Serves the deprecated ``EntryKind`` member names, warning once per access
+    site — the enum-member counterpart of the package root's ``__getattr__``
+    deprecation shim. Only reached when normal lookup fails, so a current member
+    never pays for it and the deprecated names stay out of ``__members__`` and
+    out of iteration."""
+
+    def __getattr__(cls, name: str) -> Any:
+        current = _DEPRECATED_ENTRY_KINDS.get(name)
+        if current is None:
+            raise AttributeError(
+                f"{cls.__name__!r} enum has no member {name!r}"
+            ) from None
+        warnings.warn(
+            f"EntryKind.{name} is deprecated; use EntryKind.{current} instead. "
+            "The v2 kernel renamed the node kinds to Source and Computed. The "
+            "member VALUE is unchanged — this is a rename of the name only.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return cls[current]
+
+
+class EntryKind(Enum, metaclass=_EntryKindMeta):
     """Which kind of reactive node a :class:`ReactiveMap` entry is — the
     handle-kind axis the map abstracts over.
 
     Mirrors ``EntryKind`` in ``lazily-rs`` and ``lazily-formal``.
+
+    The member **values** (``"cell"`` / ``"slot"``) are wire data: nine
+    independent binding runners read them out of the shared conformance
+    fixtures, so the v2 ``Source`` / ``Computed`` rename moved the member NAMES
+    only. The pre-v2 member names remain resolvable as deprecated aliases of
+    :attr:`SOURCE` / :attr:`COMPUTED` (see :data:`_DEPRECATED_ENTRY_KINDS`).
     """
 
     #: An **input** cell (:class:`Cell`) — always materialized on read.
-    CELL = "cell"
+    #: Deprecated alias: the pre-v2 ``CELL`` spelling.
+    SOURCE = "cell"
     #: A **derived** slot (:class:`slot`) — materialized eagerly (pre-mint) or
-    #: lazily on first read.
-    SLOT = "slot"
+    #: lazily on first read. Deprecated alias: the pre-v2 ``SLOT`` spelling.
+    COMPUTED = "slot"
 
 
 # ---------------------------------------------------------------------------
-# Sealed handle-kind seam (cell | slot only — bindings add no kinds)
+# Sealed handle-kind seam (source | computed only — bindings add no kinds)
 # ---------------------------------------------------------------------------
 
 
 class _HandleKind(ABC):
     """The entry-handle axis a :class:`ReactiveMap` abstracts over. Sealed: only
-    :class:`_CellHandleKind` (input cells) and :class:`_SlotHandleKind` (derived
-    slots) — the two node kinds of the cell model — implement it, so a binding
-    does not add new kinds (mirrors Rust's sealed ``MapHandle`` trait)."""
+    :class:`_SourceHandleKind` (input cells) and :class:`_ComputedHandleKind`
+    (derived slots) — the two node kinds of the cell model — implement it, so a
+    binding does not add new kinds (mirrors Rust's sealed ``MapHandle`` trait)."""
 
     KIND: EntryKind
 
@@ -126,8 +166,8 @@ def _reads(ctx: Any) -> Any:
     return Context(ctx)
 
 
-class _CellHandleKind(_HandleKind):
-    KIND = EntryKind.CELL
+class _SourceHandleKind(_HandleKind):
+    KIND = EntryKind.SOURCE
 
     def materialize(self, ctx: dict, compute: Callable[[Any], V]) -> MapHandle:
         # An input has no derivation: seed its value once, untracked (an input
@@ -138,8 +178,8 @@ class _CellHandleKind(_HandleKind):
         return _reads(ctx).read(handle)
 
 
-class _SlotHandleKind(_HandleKind):
-    KIND = EntryKind.SLOT
+class _ComputedHandleKind(_HandleKind):
+    KIND = EntryKind.COMPUTED
 
     def materialize(self, ctx: dict, compute: Callable[[Any], V]) -> MapHandle:
         # A derived node: the same node an eager pre-mint would allocate. Its body
@@ -151,8 +191,8 @@ class _SlotHandleKind(_HandleKind):
         return handle(ctx)  # type: ignore[operator]
 
 
-_CELL_HANDLE = _CellHandleKind()
-_SLOT_HANDLE = _SlotHandleKind()
+_SOURCE_HANDLE = _SourceHandleKind()
+_COMPUTED_HANDLE = _ComputedHandleKind()
 
 
 class ReactiveMap[K, V]:
@@ -176,7 +216,7 @@ class ReactiveMap[K, V]:
 
     #: The entry handle kind — set by the :class:`SourceMap` / :class:`ComputedMap`
     #: specialization. The generic base defaults to the cell handle.
-    _HANDLE: _HandleKind = _CELL_HANDLE
+    _HANDLE: _HandleKind = _SOURCE_HANDLE
 
     __slots__ = (
         "_entries",
@@ -220,8 +260,8 @@ class ReactiveMap[K, V]:
 
     @property
     def entry_kind(self) -> EntryKind:
-        """This map's entry kind (:attr:`EntryKind.CELL` for a :class:`SourceMap`,
-        :attr:`EntryKind.SLOT` for a :class:`ComputedMap`)."""
+        """This map's entry kind (:attr:`EntryKind.SOURCE` for a :class:`SourceMap`,
+        :attr:`EntryKind.COMPUTED` for a :class:`ComputedMap`)."""
         return self._HANDLE.KIND
 
     # -- internals ------------------------------------------------------ #
@@ -431,7 +471,7 @@ class SourceMap[K, V](ReactiveMap[K, V]):
 
     __slots__ = ()
 
-    _HANDLE = _CELL_HANDLE
+    _HANDLE = _SOURCE_HANDLE
 
     def entry_with(self, key: K, default: Callable[[], V]) -> Cell[V]:
         """Return the value cell for ``key``, minting it with ``default`` (called
@@ -472,7 +512,7 @@ class ComputedMap[K, V](ReactiveMap[K, V]):
 
     __slots__ = ()
 
-    _HANDLE = _SLOT_HANDLE
+    _HANDLE = _COMPUTED_HANDLE
 
     def materialize_all(
         self, keys: Iterable[K], factory: Callable[[Any, K], V]

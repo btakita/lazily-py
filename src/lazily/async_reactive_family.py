@@ -5,8 +5,8 @@ The Python counterpart of ``lazily-rs/src/async_reactive_family.rs``, the Lean
 ``LazilyFormal.AsyncMaterialization`` model in ``lazily-formal``, and
 ``lazily-spec/cell-model.md`` § "Execution-context flavors".
 
-Keys ``K`` map to per-entry async reactive nodes: :attr:`EntryKind.CELL` input
-cells (:class:`~lazily.Cell`, always resolved) or :attr:`EntryKind.SLOT` derived
+Keys ``K`` map to per-entry async reactive nodes: :attr:`EntryKind.SOURCE` input
+cells (:class:`~lazily.Cell`, always resolved) or :attr:`EntryKind.COMPUTED` derived
 slots (:class:`~lazily.AsyncSlot`, resolved **asynchronously**). Its two
 specializations are :class:`AsyncSourceMap` (input cells) and :class:`AsyncComputedMap`
 (derived slots).
@@ -50,8 +50,8 @@ type AsyncMapHandle = Cell | AsyncSlot
 
 class AsyncReactiveMap[K, V]:
     """The async keyed reactive collection (``#reactivemap``): keys map to
-    per-entry async reactive nodes (:attr:`EntryKind.CELL` input cells resolved
-    synchronously, or :attr:`EntryKind.SLOT` derived slots resolved
+    per-entry async reactive nodes (:attr:`EntryKind.SOURCE` input cells resolved
+    synchronously, or :attr:`EntryKind.COMPUTED` derived slots resolved
     asynchronously). Its two specializations are :class:`AsyncSourceMap` (input
     cells) and :class:`AsyncComputedMap` (derived slots).
 
@@ -61,7 +61,7 @@ class AsyncReactiveMap[K, V]:
     """
 
     #: The entry kind — set by the specialization.
-    _KIND: EntryKind = EntryKind.CELL
+    _KIND: EntryKind = EntryKind.SOURCE
 
     __slots__ = ("_ctx", "_materialized", "_order")
 
@@ -86,7 +86,7 @@ class AsyncReactiveMap[K, V]:
         # surface, so a sync-node read from the factory is untracked (cross-engine):
         # pass an untracked view over the owning dict.
         view = _reads(self._ctx)
-        if self._KIND is EntryKind.CELL:
+        if self._KIND is EntryKind.SOURCE:
             # An input cell sets its value directly (always resolved).
             handle: AsyncMapHandle = Cell(self._ctx, factory(view, key))
         else:
@@ -118,7 +118,7 @@ class AsyncReactiveMap[K, V]:
         handle = self._materialized.get(key)
         if handle is None:
             return None
-        if self._KIND is EntryKind.CELL:
+        if self._KIND is EntryKind.SOURCE:
             return handle.value  # type: ignore[union-attr]
         return handle.get()
 
@@ -127,7 +127,7 @@ class AsyncReactiveMap[K, V]:
         entry via ``factory(key)`` if absent. For a cell this is immediate; for a
         slot it awaits the async recomputation."""
         handle = self._mint(key, factory)
-        if self._KIND is EntryKind.CELL:
+        if self._KIND is EntryKind.SOURCE:
             return handle.value  # type: ignore[union-attr]
         return await handle.get_async()  # type: ignore[union-attr]
 
@@ -160,7 +160,7 @@ class AsyncSourceMap[K, V](AsyncReactiveMap[K, V]):
 
     __slots__ = ()
 
-    _KIND = EntryKind.CELL
+    _KIND = EntryKind.SOURCE
 
     def set(self, key: K, value: V) -> None:
         """Set the value at ``key``, inserting a new input cell if absent.
@@ -180,7 +180,7 @@ class AsyncComputedMap[K, V](AsyncReactiveMap[K, V]):
 
     __slots__ = ()
 
-    _KIND = EntryKind.SLOT
+    _KIND = EntryKind.COMPUTED
 
     def materialize_all(
         self, keys: Iterable[K], factory: Callable[[Any, K], V]
