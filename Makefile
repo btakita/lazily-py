@@ -51,7 +51,11 @@ type-check:
 	poe ty
 
 # Run all checks
-check: format lint type-check test conformance-coverage
+.PHONY: test-interop-peer
+test-interop-peer:
+	uv run python -m lazily.interop_peer --self-check
+
+check: format lint type-check test conformance-coverage test-interop-peer
 
 # Run the micro-benchmark suite (see BENCHMARKS.md)
 bench:
