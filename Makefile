@@ -22,7 +22,8 @@ init:
 
 # Run tests
 test:
-	uv run pytest tests/ -v
+	@mkdir -p build && : > build/conformance-fixtures-loaded.txt
+	LAZILY_CONFORMANCE_MANIFEST=build/conformance-fixtures-loaded.txt uv run pytest tests/ -v
 
 # Compile the reactive core with mypyc (in-place .so files). Idempotent —
 # rebuild after editing src/lazily/{slot,cell,signal,effect,batch}.py to run
