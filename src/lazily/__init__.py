@@ -311,7 +311,6 @@ __all__ = [
     "WorkQueueDelivery",
     "WorkQueueItem",
     "WorkQueueReaderHandles",
-    "# -- new reactive-primitive families ---------------------------------- #",
     "align",
     "applied_receipt",
     "assign_stable_keys",
