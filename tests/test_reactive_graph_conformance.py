@@ -102,6 +102,7 @@ FIXTURES = (
     "disarm_disposes_nothing.json",
     "dispose_detaches_edges_both_directions.json",
     "dispose_signal_reverts_to_lazy.json",
+    "failed_compute_is_never_cached.json",
     "disposal_does_not_run_surviving_effects.json",
     "exact_fold_paths_stay_exact.json",
     "feedback_drain_bound_reports_exhaustion.json",
@@ -216,6 +217,9 @@ _SUPPORTED_OPS = frozenset(
         "drive",
         "effect",
         "end_scope",
+        # Arms the next N computes of an existing node to raise, so a fixture
+        # can assert on `computes_of` that a failed compute is never cached.
+        "fail_next",
         "fanout",
         "read",
         "set_cell",
@@ -254,6 +258,22 @@ _SUPPORTED_SHAPES = frozenset({"scenarios", "steps"})
 # is *compared* like any other observation instead of aborting the replay.
 _ERR: tuple[str, Any] = ("err", None)
 
+# A read whose compute body raised because `fail_next` armed it. Deliberately a
+# DIFFERENT observation from `_ERR`: disposal is permanent by contract, a failed
+# compute is recoverable by contract (the next read re-runs the body), so the
+# replay must not latch the id for this one.
+_FAIL: tuple[str, Any] = ("compute_failed", None)
+
+
+class ComputeFailed(Exception):
+    """Raised by a `fail_next`-armed compute body.
+
+    A runner-owned sentinel, not a library error: the contract under test is
+    that the library does not CACHE it, so what it is matters less than that the
+    same body raises it once per armed run and the node still re-runs afterwards.
+    """
+
+
 
 def _ok(value: Any) -> tuple[str, Any]:
     return ("ok", value)
@@ -286,6 +306,8 @@ class SyncModel:
         # what the runner believes should have run — the whole point of the key
         # is that an eager signal and a lazy memo are value-indistinguishable.
         self.computes: dict[str, int] = {}
+        # How many upcoming compute bodies must fail, per node id (`fail_next`).
+        self.armed: dict[str, int] = {}
 
     # -- helpers --------------------------------------------------------- #
 
@@ -305,11 +327,25 @@ class SyncModel:
             return node.value
         return node(self.ctx)
 
+    def fail_next(self, node_id: str, count: int) -> None:
+        self.armed[node_id] = self.armed.get(node_id, 0) + (count if count > 0 else 1)
+
+    def _take_armed(self, node_id: str) -> bool:
+        """Consume one arming. Called AFTER the compute counter ticks, so an
+        armed run is counted exactly like a successful one."""
+        remaining = self.armed.get(node_id, 0)
+        if remaining <= 0:
+            return False
+        self.armed[node_id] = remaining - 1
+        return True
+
     def _compute(self, node_id: str, reads: list[Any], offset: Any) -> Any:
         self.computes.setdefault(node_id, 0)
 
         def compute(_ctx: dict) -> Any:
             self.computes[node_id] += 1
+            if self._take_armed(node_id):
+                raise ComputeFailed(node_id)
             total = offset
             for dep in reads:
                 total += self._value_of(dep, _ctx)
@@ -384,6 +420,8 @@ class SyncModel:
             if isinstance(node, (Cell, Computed)):
                 return _ok(node.value)
             return _ok(node(self.ctx))
+        except ComputeFailed:
+            return _FAIL
         except DisposedError:
             return _ERR
 
@@ -471,6 +509,8 @@ class AsyncModel:
         self.runs: list[str] = []
         self.cleanups: list[str] = []
         self.computes: dict[str, int] = {}
+        # How many upcoming compute bodies must fail, per node id (`fail_next`).
+        self.armed: dict[str, int] = {}
 
     # -- helpers --------------------------------------------------------- #
 
@@ -479,11 +519,25 @@ class AsyncModel:
             return cc.get(node)
         return await cc.get_async(node)
 
+    def fail_next(self, node_id: str, count: int) -> None:
+        self.armed[node_id] = self.armed.get(node_id, 0) + (count if count > 0 else 1)
+
+    def _take_armed(self, node_id: str) -> bool:
+        """Consume one arming. Called AFTER the compute counter ticks, so an
+        armed run is counted exactly like a successful one."""
+        remaining = self.armed.get(node_id, 0)
+        if remaining <= 0:
+            return False
+        self.armed[node_id] = remaining - 1
+        return True
+
     def _compute(self, node_id: str, reads: list[Any], offset: Any) -> Any:
         self.computes.setdefault(node_id, 0)
 
         async def compute(cc: Any) -> Any:
             self.computes[node_id] += 1
+            if self._take_armed(node_id):
+                raise ComputeFailed(node_id)
             total = offset
             for dep in reads:
                 total += await self._value_of(cc, dep)
@@ -533,6 +587,8 @@ class AsyncModel:
             if isinstance(node, AsyncCellHandle):
                 return _ok(node.get())
             return _ok(await self.ctx.get_async(node))
+        except ComputeFailed:
+            return _FAIL
         except DisposedError:
             return _ERR
 
@@ -729,6 +785,10 @@ async def _replay(
         if node_id in poisoned:
             return _ERR
         result = await model.read(node_of(node_id))
+        # Only disposal latches. A `fail_next` compute failure is recoverable by
+        # contract, so latching it would make the replay report the very defect
+        # `failed_compute_is_never_cached.json` exists to catch, against
+        # bindings that are correct.
         if result == _ERR:
             poisoned.add(node_id)
         return result
@@ -784,10 +844,12 @@ async def _replay(
             register(op["id"], await model.effect(op["id"], reads, op.get("scope")))
         elif kind == "read":
             result = await read_id(op["id"])
-            if result == _ERR:
+            if result in (_ERR, _FAIL):
                 op_error = True
             else:
                 op_value = result[1]
+        elif kind == "fail_next":
+            model.fail_next(op["id"], op.get("count", 1))
         elif kind == "set_cell":
             await model.set_cell(node_of(op["id"]), op["value"])
         elif kind == "dispose":
@@ -893,12 +955,11 @@ async def _replay(
                         degree,
                     )
             elif key == "error":
-                if want is None:
-                    check("error", op_error, False)
-                elif want == "read_after_dispose":
-                    check("error", op_error, True)
-                else:
-                    raise AssertionError(f"{name}: unknown expected error {want}")
+                # Any non-null error code means "this op must fail"; null means
+                # "must not". The runner does not model error identity -- the
+                # fixtures carry the code so the contract is legible, and each
+                # binding's own tests pin which error type it raises.
+                check("error", op_error, want is not None)
             elif key == "computes_of":
                 # Cumulative since the start of the scenario, counted by the
                 # synthesized compute itself. Sorts before `readable` and
