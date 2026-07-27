@@ -1,3 +1,21 @@
+## 0.38.0
+
+### Added
+
+- The queue family now binds single-threaded, thread-safe, and async execution
+flavors and replays the canonical flavor corpus.
+- A production interop peer adapter supports capability-negotiated
+cross-binding network-suite tests.
+- Async public handles and factories now use the canonical `AsyncSource` /
+`AsyncComputed` vocabulary.
+
+### Changed
+
+- Deprecated async handle and factory names remain identity-preserving aliases
+or warning forwarders into the canonical implementation.
+- Signaling rejects malformed frames, and reactive-map removal disposes the
+removed graph handle.
+
 ## 0.37.1
 
 ### Changed — docs
