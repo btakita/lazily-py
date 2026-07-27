@@ -247,19 +247,15 @@ class ThreadSafeReactiveMap[K, V]:
         return self._apply_move(outcome)
 
     def remove(self, key: K) -> bool:
-        """Remove ``key``'s entry and bump reactive membership. Returns whether
-        the key was present.
-
-        Matches the single-threaded map: the orphaned node is dropped, not torn
-        down, because this binding's handle kinds expose no disposal hook. That
-        gap is the same on all three flavors and is tracked separately — it is
-        not something this flavor should solve alone and differently."""
+        """Remove and dispose ``key``'s entry, then bump reactive membership.
+        Returns whether the key was present."""
         with self._mutex:
-            _, mutation = self._keyed.remove(key)
-        if not mutation.changed:
+            handle, mutation = self._keyed.remove(key)
+        if not mutation.changed or handle is None:
             return False
-        # Off the present-set lock: the membership bump can drive a dependent
-        # recompute that re-enters this map.
+        # Off the present-set lock: both disposal and the membership bump can
+        # dirty a dependent that re-enters this map.
+        self._HANDLE.clear_dependents(self._ctx, handle)
         self._bump_membership()
         return True
 

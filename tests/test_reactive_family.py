@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from lazily import ComputedMap, EntryKind, SourceMap
+from lazily import ComputedMap, DisposedError, EntryKind, SourceMap
 
 
 _LOCAL_FIXTURES = Path(__file__).resolve().parent / "conformance" / "materialization"
@@ -156,6 +156,29 @@ def test_source_map_set_seeds_and_updates() -> None:
     fam.set("a", 42)  # existing entry: no membership change
     assert fam.present_count() == 1
     assert fam.get("a") == 42
+
+
+def test_source_map_remove_disposes_held_handle() -> None:
+    fam: SourceMap[str, int] = SourceMap({})
+    handle = fam.entry("a", 7)
+
+    assert fam.remove("a")
+    assert handle.disposed
+    with pytest.raises(DisposedError, match="disposed cell"):
+        handle.get()
+
+
+def test_computed_map_remove_disposes_held_handle() -> None:
+    ctx: dict = {}
+    fam: ComputedMap[str, int] = ComputedMap(ctx)
+    assert fam.get_or_insert_with("a", lambda _c, _k: 7) == 7
+    handle = fam.handle("a")
+    assert handle is not None
+
+    assert fam.remove("a")
+    assert handle.disposed
+    with pytest.raises(DisposedError, match="disposed slot"):
+        handle(ctx)
 
 
 def test_observe_is_reactive_when_factory_reads_a_cell() -> None:

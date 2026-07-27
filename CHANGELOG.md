@@ -8,6 +8,13 @@
   (`QueueCell`) Core surfaces. Python's own behaviour is unchanged — the
   Python column on those six rows still reads `—`.
 
+### Fixed
+
+- Removing an entry from a synchronous, thread-safe, or async reactive map now
+  tears down its handle. Graph-backed source/computed nodes are disposed, while
+  a legacy async computed entry is hard-cleared so a held handle cannot keep
+  serving the removed entry's last resolved value.
+
 ## 0.37.0
 
 ### Added

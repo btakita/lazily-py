@@ -49,6 +49,20 @@ V = TypeVar("V")
 type AsyncMapHandle = Cell | AsyncSlot
 
 
+def _clear_dependents(handle: AsyncMapHandle) -> None:
+    """Tear down a removed async-map entry.
+
+    Source entries are ordinary graph-backed cells and therefore receive
+    terminal disposal. The legacy :class:`AsyncSlot` has no dependency graph or
+    terminal disposed state, so its matching teardown is a hard clear: discard
+    the resolved cache and invalidate any in-flight revision.
+    """
+    if isinstance(handle, Cell):
+        handle.dispose()
+    else:
+        handle.hard_clear()
+
+
 class AsyncReactiveMap[K, V]:
     """The async keyed reactive collection (``#reactivemap``): keys map to
     per-entry async reactive nodes (:attr:`EntryKind.SOURCE` input cells resolved
@@ -223,14 +237,12 @@ class AsyncReactiveMap[K, V]:
         return self._apply_move(self._keyed.move_after(key, anchor))
 
     def remove(self, key: K) -> bool:
-        """Remove ``key``'s entry and bump reactive membership. Returns whether
-        the key was present.
-
-        Matches the other two flavors: the orphaned node is dropped, not torn
-        down, because this binding's handle kinds expose no disposal hook."""
-        _, mutation = self._keyed.remove(key)
-        if not mutation.changed:
+        """Remove and tear down ``key``'s entry, then bump reactive membership.
+        Returns whether the key was present."""
+        handle, mutation = self._keyed.remove(key)
+        if not mutation.changed or handle is None:
             return False
+        _clear_dependents(handle)
         self._bump_membership()
         return True
 

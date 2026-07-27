@@ -14,8 +14,11 @@ from __future__ import annotations
 
 import threading
 
+import pytest
+
 from lazily import (
     Cell,
+    DisposedError,
     EntryKind,
     Slot,
     ThreadSafeComputedMap,
@@ -62,6 +65,30 @@ def test_source_map_writes_through_coalescing_context() -> None:
     assert fam.observe(7) == 7
     fam.set(7, 100)  # routed through the ThreadSafeContext boundary
     assert fam.observe(7) == 100
+
+
+def test_source_map_remove_disposes_held_handle() -> None:
+    fam: ThreadSafeSourceMap[str, int] = ThreadSafeSourceMap({})
+    fam.set("a", 7)
+    handle = fam.handle("a")
+    assert handle is not None
+
+    assert fam.remove("a")
+    assert handle.disposed
+    with pytest.raises(DisposedError, match="disposed cell"):
+        handle.get()
+
+
+def test_computed_map_remove_disposes_held_handle() -> None:
+    ctx: dict = {}
+    fam: ThreadSafeComputedMap[str, int] = ThreadSafeComputedMap(ctx)
+    handle = fam.get_or_insert_handle("a", lambda _c, _k: 7)
+    assert fam.observe("a") == 7
+
+    assert fam.remove("a")
+    assert handle.disposed
+    with pytest.raises(DisposedError, match="disposed slot"):
+        handle(ctx)
 
 
 def test_observe_is_reactive_when_factory_reads_a_cell() -> None:

@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import asyncio
 
-from lazily import AsyncComputedMap, AsyncSourceMap, Cell, EntryKind
+import pytest
+
+from lazily import AsyncComputedMap, AsyncSourceMap, Cell, DisposedError, EntryKind
 
 
 def test_eager_computed_map_materializes_all_up_front() -> None:
@@ -78,6 +80,32 @@ def test_source_map_entries_are_writable_inputs() -> None:
     assert isinstance(handle, Cell)
     fam.set(7, 100)
     assert fam.observe(7) == 100
+
+
+def test_source_map_remove_disposes_held_handle() -> None:
+    fam: AsyncSourceMap[str, int] = AsyncSourceMap({})
+    fam.set("a", 7)
+    handle = fam.handle("a")
+    assert isinstance(handle, Cell)
+
+    assert fam.remove("a")
+    assert handle.disposed
+    with pytest.raises(DisposedError, match="disposed cell"):
+        handle.get()
+
+
+def test_computed_map_remove_clears_held_handle_cache() -> None:
+    async def scenario() -> None:
+        fam: AsyncComputedMap[str, int] = AsyncComputedMap({})
+        handle = fam.get_or_insert_handle("a", lambda _c, _k: 7)
+        assert await handle.get_async() == 7
+        revision = handle.revision
+
+        assert fam.remove("a")
+        assert handle.get() is None
+        assert handle.revision == revision + 1
+
+    asyncio.run(scenario())
 
 
 def test_present_set_is_monotone_across_reads() -> None:

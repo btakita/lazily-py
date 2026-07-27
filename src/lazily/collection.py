@@ -155,6 +155,11 @@ class _HandleKind(ABC):
         (subscribes the running Slot/Effect by value-threading) or a bare dict /
         ``None`` for an untracked top-level read."""
 
+    @abstractmethod
+    def clear_dependents(self, ctx: dict, handle: MapHandle) -> None:
+        """Dispose a removed entry's node, detaching both edge directions and
+        preventing a held handle from serving its former cached value."""
+
 
 def _reads(ctx: Any) -> Any:
     """The value-threaded read surface for ``ctx``: the compute view itself when
@@ -178,6 +183,10 @@ class _SourceHandleKind(_HandleKind):
     def observe(self, ctx: Any, handle: MapHandle) -> V:
         return _reads(ctx).read(handle)
 
+    def clear_dependents(self, ctx: dict, handle: MapHandle) -> None:
+        assert isinstance(handle, Cell)
+        handle.dispose()
+
 
 class _ComputedHandleKind(_HandleKind):
     KIND = EntryKind.COMPUTED
@@ -190,6 +199,10 @@ class _ComputedHandleKind(_HandleKind):
 
     def observe(self, ctx: Any, handle: MapHandle) -> V:
         return handle(ctx)  # type: ignore[operator]
+
+    def clear_dependents(self, ctx: dict, handle: MapHandle) -> None:
+        assert isinstance(handle, Slot)
+        handle.dispose(ctx)
 
 
 _SOURCE_HANDLE = _SourceHandleKind()
@@ -337,11 +350,12 @@ class ReactiveMap[K, V]:
         return self._HANDLE.observe(read_ctx, handle)
 
     def remove(self, key: K) -> bool:
-        """Remove ``key``'s entry. Bumps reactive membership. Returns whether the
-        key was present. (No-op if ``key`` is not a member.)"""
-        _, mutation = self._keyed.remove(key)
-        if not mutation.changed:
+        """Remove and dispose ``key``'s entry, then bump reactive membership.
+        Returns whether the key was present. (No-op if it was not a member.)"""
+        handle, mutation = self._keyed.remove(key)
+        if not mutation.changed or handle is None:
             return False
+        self._HANDLE.clear_dependents(self.ctx, handle)
         self._bump_membership()
         return True
 
