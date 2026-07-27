@@ -15,7 +15,7 @@ the value node the `Source` handle is bound to.
 
 - **`Source`** — a value written from *outside* (`set` / `merge`); the writable
   kind. Construct with `source` / `cell` (handle `Source`, native class `Cell`,
-  slot `SourceSlot` / `CellSlot`). A [`MergeCell`](#merge-algebra) is a `Source`
+  slot `SourceSlot`, native class `CellSlot`). A [`MergeCell`](#merge-algebra) is a `Source`
   whose write folds under a non-`KeepLatest` policy (`Cell ≡ Source(KeepLatest)`).
 - **`Computed`** — a value computed from *upstream*, via a compute function.
   Construct with `computed(ctx, f)`. **Guarded by default** and **lazy by
@@ -135,21 +135,21 @@ pip install lazily
 ## Example usage
 
 ```python
-from lazily import CellSlot, cell, slot
+from lazily import SourceSlot, source, slot
 
-# Cells hold a value that can be updated.
-name = CellSlot[dict, dict, str]()
+# Sources hold a value that can be updated.
+name = SourceSlot[dict, dict, str]()
 
 
-# Slots are functions that depend on cells and other slots.
+# Slots are functions that depend on sources and other slots.
 @slot
 def greeting(ctx: dict) -> str:
     print("Calculating greeting...")
     return f"Hello, {name(ctx).value}!"
 
 
-# A CellSlot can also have a default value.
-@cell
+# A SourceSlot can also have a default value.
+@source
 def response(ctx: dict) -> str:
     return "How are you?"
 
@@ -231,8 +231,8 @@ changed, cascades invalidation to dependents. Construct with `source` (the v1
 | Type | Purpose |
 |------|---------|
 | `Cell[T]` / `Source[T]` | Mutable source value with subscription support |
-| `CellSlot[C_in, C_ctx, T]` | Slot that returns a `Source` cell |
-| `source` | Decorator: `CellSlot` with an identity resolver (canonical) |
+| `SourceSlot[C_in, C_ctx, T]` (native class `CellSlot`) | Slot that returns a `Source` cell |
+| `source` | Decorator: `SourceSlot` with an identity resolver (canonical) |
 | `source_def(resolve_ctx)` | Decorator factory for a custom context resolver |
 | `cell` / `cell_def` | **Deprecated** v1 aliases of `source` / `source_def` |
 
@@ -245,9 +245,9 @@ invalidated*, before the mutating call returns. The value is always materialized
 so observers never see an intermediate unset value.
 
 ```python
-from lazily import CellSlot, computed
+from lazily import SourceSlot, computed
 
-n = CellSlot[dict, dict, int]()
+n = SourceSlot[dict, dict, int]()
 
 ctx: dict = {}
 n(ctx).value = 1
