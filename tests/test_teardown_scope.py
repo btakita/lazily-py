@@ -370,7 +370,7 @@ def test_async_scope_disposes_members_on_exit() -> None:
             return cc.get(topic) * 2
 
         async with ctx.scope() as scope:
-            doubled = scope.computed_async(double)
+            doubled = scope.computed(double)
             assert await ctx.get_async(doubled) == 4
             assert ctx.dependent_count(topic) == 1
             assert ctx.dependency_count(doubled) == 1
@@ -398,15 +398,15 @@ def test_async_disposal_dirties_a_surviving_reader() -> None:
         async def derive(cc: Any) -> int:
             return cc.get(src)
 
-        derived = ctx.computed_async(derive)
+        derived = ctx.computed(derive)
 
         async def read_derived(cc: Any) -> int:
             return await cc.get_async(derived) + 1
 
-        reader = ctx.computed_async(read_derived)
+        reader = ctx.computed(read_derived)
         assert await ctx.get_async(reader) == 5
 
-        ctx.dispose_slot(derived)
+        ctx.dispose_computed(derived)
 
         with pytest.raises(DisposedError):
             await ctx.get_async(reader)
@@ -425,7 +425,7 @@ def test_async_disposal_does_not_schedule_a_reached_effect() -> None:
         async def derive(cc: Any) -> int:
             return cc.get(src)
 
-        derived = ctx.computed_async(derive)
+        derived = ctx.computed(derive)
 
         async def body(cc: Any) -> None:
             runs.append("run")
@@ -435,7 +435,7 @@ def test_async_disposal_does_not_schedule_a_reached_effect() -> None:
         await watcher.settle()
         assert runs == ["run"]
 
-        ctx.dispose_slot(derived)
+        ctx.dispose_computed(derived)
         await asyncio.sleep(0)
         assert runs == ["run"], "disposal scheduled an async effect"
         assert not watcher.disposed
@@ -488,7 +488,7 @@ def test_async_disarm_disposes_nothing() -> None:
             return cc.get(topic)
 
         scope = ctx.scope()
-        escaped = scope.computed_async(compute)
+        escaped = scope.computed(compute)
         assert await ctx.get_async(escaped) == 1
 
         scope.disarm()

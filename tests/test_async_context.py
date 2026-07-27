@@ -17,9 +17,12 @@ import pytest
 from lazily import (
     AsyncCellHandle,
     AsyncComputeContext,
+    AsyncComputed,
+    AsyncComputedState,
     AsyncContext,
     AsyncContextDisposedError,
     AsyncSlotHandle,
+    AsyncSource,
     EffectState,
     SlotState,
 )
@@ -40,7 +43,7 @@ async def _settle() -> None:
 def test_slot_starts_empty_and_resolves() -> None:
     async def scenario() -> None:
         ctx = AsyncContext()
-        slot = ctx.computed_async(lambda cc: _const(7))
+        slot = ctx.computed(lambda cc: _const(7))
         assert slot.state is SlotState.EMPTY
         assert slot.get() is None
         assert await slot.get_async() == 7
@@ -66,7 +69,7 @@ def test_error_state_then_retry_transitions_back_to_computing() -> None:
                 raise ValueError("boom")
             return 42
 
-        slot = ctx.computed_async(compute)
+        slot = ctx.computed(compute)
         with pytest.raises(ValueError, match="boom"):
             await slot.get_async()
         assert slot.state is SlotState.ERROR
@@ -81,7 +84,7 @@ def test_invalidation_moves_resolved_back_to_computing() -> None:
     async def scenario() -> None:
         ctx = AsyncContext()
         src = ctx.source(2)
-        slot = ctx.computed_async(lambda cc: _const(cc.get(src) * 10))
+        slot = ctx.computed(lambda cc: _const(cc.get(src) * 10))
         assert await slot.get_async() == 20
         assert slot.state is SlotState.RESOLVED
         ctx.set(src, 3)
@@ -103,7 +106,7 @@ def test_equal_write_is_guarded_and_does_not_invalidate() -> None:
             runs.append(v)
             return v
 
-        slot = ctx.computed_async(compute)
+        slot = ctx.computed(compute)
         assert await slot.get_async() == 2
         ctx.set(src, 2)  # equal write — PartialEq guard
         assert slot.state is SlotState.RESOLVED
@@ -132,7 +135,7 @@ def test_stale_completion_is_discarded_not_published() -> None:
                 await gate.wait()
             return v * 10
 
-        slot = ctx.computed_async(compute)
+        slot = ctx.computed(compute)
         task = asyncio.create_task(slot.get_async())
         await _settle()
         assert seen == [1]  # suspended mid-compute
@@ -166,7 +169,7 @@ def test_stale_error_is_discarded_and_the_slot_re_resolves() -> None:
                 raise ValueError("stale failure")
             return v
 
-        slot = ctx.computed_async(compute)
+        slot = ctx.computed(compute)
         task = asyncio.create_task(slot.get_async())
         await _settle()
         ctx.set(src, 9)
@@ -196,7 +199,7 @@ def test_dropping_one_waiter_does_not_cancel_the_shared_computation() -> None:
             await gate.wait()
             return 5
 
-        slot = ctx.computed_async(compute)
+        slot = ctx.computed(compute)
         a = asyncio.create_task(slot.get_async())
         b = asyncio.create_task(slot.get_async())
         await _settle()
@@ -220,7 +223,7 @@ def test_concurrent_get_async_callers_share_one_in_flight_computation() -> None:
             await gate.wait()
             return 3
 
-        slot = ctx.computed_async(compute)
+        slot = ctx.computed(compute)
         waiters = [asyncio.create_task(slot.get_async()) for _ in range(5)]
         await _settle()
         gate.set()
@@ -244,7 +247,7 @@ def test_hard_clear_cancels_the_in_flight_revision() -> None:
                 await gate.wait()
             return v
 
-        slot = ctx.computed_async(compute)
+        slot = ctx.computed(compute)
         task = asyncio.create_task(slot.get_async())
         await _settle()
         slot.hard_clear()
@@ -278,7 +281,7 @@ def test_context_disposal_awaits_cleanup_and_makes_reads_inert() -> None:
         # nothing about what disposal awaits.
         assert order == ["body"]
 
-        slot = ctx.computed_async(lambda cc: _const(1))
+        slot = ctx.computed(lambda cc: _const(1))
         await ctx.dispose_async()
         # Disposal ran and awaited every active cleanup future before returning.
         assert order == ["body", "cleanup"]
@@ -299,7 +302,7 @@ def test_disposal_cancels_in_flight_computations() -> None:
             await gate.wait()
             return 1
 
-        slot = ctx.computed_async(compute)
+        slot = ctx.computed(compute)
         task = asyncio.create_task(slot.get_async())
         await _settle()
         await ctx.dispose_async()
@@ -330,7 +333,7 @@ def test_resolved_since_get_window_is_benign() -> None:
             await gate.wait()
             return 11
 
-        slot = ctx.computed_async(compute)
+        slot = ctx.computed(compute)
         first = asyncio.create_task(slot.get_async())
         await _settle()
         gate.set()
@@ -357,7 +360,7 @@ def test_repeated_invalidation_during_compute_re_resolves_without_error() -> Non
                 await gate.wait()
             return v
 
-        slot = ctx.computed_async(compute)
+        slot = ctx.computed(compute)
         task = asyncio.create_task(slot.get_async())
         for nxt in (1, 2, 3):
             await _settle()
@@ -385,7 +388,7 @@ def test_edges_register_before_the_awaited_read() -> None:
             await gate.wait()
             return v
 
-        slot = ctx.computed_async(compute)
+        slot = ctx.computed(compute)
         task = asyncio.create_task(slot.get_async())
         await _settle()
         # Suspended at the await — the edge is already live, so a write now
@@ -402,8 +405,8 @@ def test_invalidation_propagates_through_the_transitive_cone() -> None:
     async def scenario() -> None:
         ctx = AsyncContext()
         src = ctx.source(2)
-        a = ctx.computed_async(lambda cc: _const(cc.get(src) + 1))
-        b = ctx.computed_async(lambda cc: cc.get_async(a))
+        a = ctx.computed(lambda cc: _const(cc.get(src) + 1))
+        b = ctx.computed(lambda cc: cc.get_async(a))
         assert await b.get_async() == 3
         ctx.set(src, 10)
         # src -> a -> b: the whole cone is stale, not just the direct dependent.
@@ -428,7 +431,7 @@ def test_stale_dependencies_are_detached_on_rerun() -> None:
             runs.append(v)
             return v
 
-        slot = ctx.computed_async(compute)
+        slot = ctx.computed(compute)
         assert await slot.get_async() == 1
         ctx.set(which, False)
         assert await slot.get_async() == 100
@@ -444,7 +447,7 @@ def test_memo_guard_republishes_the_previous_value_object() -> None:
     async def scenario() -> None:
         ctx = AsyncContext()
         src = ctx.source(1)
-        slot = ctx.memo_async(
+        slot = ctx.computed_with_equals(
             lambda cc: _const([cc.get(src) % 2]),
             lambda a, b: a == b,
         )
@@ -457,12 +460,12 @@ def test_memo_guard_republishes_the_previous_value_object() -> None:
     asyncio.run(scenario())
 
 
-def test_computed_ripple_when_async_gates_on_custom_predicate() -> None:
+def test_computed_ripple_when_gates_on_custom_predicate() -> None:
     async def scenario() -> None:
         ctx = AsyncContext()
         src = ctx.source(0)
         # Propagate only when the /10 bucket changes; suppress within a bucket.
-        slot = ctx.computed_ripple_when_async(
+        slot = ctx.computed_ripple_when(
             lambda cc: _const((cc.get(src), cc.get(src) // 10)),
             lambda old, new: old[1] != new[1],
         )
@@ -481,12 +484,12 @@ def test_computed_ripple_when_async_gates_on_custom_predicate() -> None:
     asyncio.run(scenario())
 
 
-def test_computed_ripple_when_async_always_propagate_is_pass_through() -> None:
+def test_computed_ripple_when_always_propagate_is_pass_through() -> None:
     async def scenario() -> None:
         ctx = AsyncContext()
         src = ctx.source(0)
         # Always-propagate predicate: even an equal recompute publishes anew.
-        slot = ctx.computed_ripple_when_async(
+        slot = ctx.computed_ripple_when(
             lambda cc: _const([cc.get(src) * 0]),  # always [0]
             lambda old, new: True,
         )
@@ -714,7 +717,7 @@ def test_batched_slot_invalidation_defers_to_the_outermost_exit() -> None:
     async def scenario() -> None:
         ctx = AsyncContext()
         src = ctx.source(1)
-        slot = ctx.computed_async(lambda cc: _const(cc.get(src)))
+        slot = ctx.computed(lambda cc: _const(cc.get(src)))
         assert await slot.get_async() == 1
 
         def writes() -> None:
@@ -739,11 +742,11 @@ def test_context_api_surface_matches_the_spec_table() -> None:
         "cell",
         "get_cell",
         "set_cell",
-        "computed_async",
+        "computed",
         "get",
         "get_async",
-        "memo_async",
-        "computed_ripple_when_async",
+        "computed_with_equals",
+        "computed_ripple_when",
         "effect_async",
         "dispose_async_effect",
         "dispose_async",
@@ -758,6 +761,9 @@ def test_handles_are_exported_from_the_package_root() -> None:
     for name in (
         "AsyncContext",
         "AsyncCellHandle",
+        "AsyncSource",
+        "AsyncComputed",
+        "AsyncComputedState",
         "AsyncSlotHandle",
         "AsyncEffectHandle",
         "AsyncComputeContext",
@@ -769,9 +775,33 @@ def test_handles_are_exported_from_the_package_root() -> None:
 
 def test_cell_and_slot_handle_types_are_usable_in_annotations() -> None:
     ctx = AsyncContext()
-    c: AsyncCellHandle[int] = ctx.source(1)
-    s: AsyncSlotHandle[int] = ctx.computed_async(lambda cc: _const(2))
+    c: AsyncSource[int] = ctx.source(1)
+    s: AsyncComputed[int] = ctx.computed(lambda cc: _const(2))
     assert c.get() == 1
     assert c.peek == 1
-    assert repr(c) == "AsyncCellHandle(1)"
+    assert repr(c) == "AsyncSource(1)"
     assert s.get() is None
+
+
+def test_async_v2_alias_identity_and_deprecated_factories() -> None:
+    assert AsyncCellHandle is AsyncSource
+    assert AsyncSlotHandle is AsyncComputed
+    assert AsyncComputedState is SlotState
+
+    async def scenario() -> None:
+        ctx = AsyncContext()
+        with pytest.warns(DeprecationWarning, match="computed_async"):
+            computed = ctx.computed_async(lambda cc: _const(3))
+        assert type(computed) is AsyncComputed
+        assert isinstance(computed, AsyncSlotHandle)
+        assert await computed.get_async() == 3
+
+        with pytest.warns(DeprecationWarning, match="memo_async"):
+            memo = ctx.memo_async(
+                lambda cc: _const("value"),
+                lambda left, right: left == right,
+            )
+        assert type(memo) is AsyncComputed
+        assert await memo.get_async() == "value"
+
+    asyncio.run(scenario())

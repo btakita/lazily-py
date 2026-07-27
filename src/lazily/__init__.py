@@ -35,7 +35,9 @@ __all__ = [
     "AsyncCellHandle",
     "AsyncCellMap",
     "AsyncComputeContext",
+    "AsyncComputed",
     "AsyncComputedMap",
+    "AsyncComputedState",
     "AsyncContext",
     "AsyncContextDisposedError",
     "AsyncEffect",
@@ -45,6 +47,7 @@ __all__ = [
     "AsyncSlot",
     "AsyncSlotHandle",
     "AsyncSlotMap",
+    "AsyncSource",
     "AsyncSourceMap",
     "AsyncTeardownScope",
     "AsyncTopicCell",
@@ -433,10 +436,13 @@ from . import (
 from .async_context import (
     AsyncCellHandle,
     AsyncComputeContext,
+    AsyncComputed,
+    AsyncComputedState,
     AsyncContext,
     AsyncContextDisposedError,
     AsyncEffectHandle,
     AsyncSlotHandle,
+    AsyncSource,
     AsyncTeardownScope,
 )
 from .async_effect import AsyncEffect, EffectEvent, EffectState

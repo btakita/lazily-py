@@ -80,7 +80,7 @@ from lazily import (
     batch,
     computed,
 )
-from lazily.async_context import AsyncCellHandle, AsyncContext, AsyncEffectHandle
+from lazily.async_context import AsyncContext, AsyncEffectHandle, AsyncSource
 from lazily.slot import DisposedError
 from lazily.teardown import dispose_node
 from lazily.thread_safe import ThreadSafeContext
@@ -514,7 +514,7 @@ class AsyncModel:
     # -- helpers --------------------------------------------------------- #
 
     async def _value_of(self, cc: Any, node: Any) -> Any:
-        if isinstance(node, AsyncCellHandle):
+        if isinstance(node, AsyncSource):
             return cc.get(node)
         return await cc.get_async(node)
 
@@ -569,8 +569,8 @@ class AsyncModel:
     ) -> Any:
         compute = self._compute(node_id, reads, offset)
         if scope is not None:
-            return self.scopes[scope].computed_async(compute)
-        return self.ctx.computed_async(compute)
+            return self.scopes[scope].computed(compute)
+        return self.ctx.computed(compute)
 
     async def batch_writes(self, writes: list[tuple[Any, Any]]) -> None:
         self.ctx.batch(lambda: [self.ctx.set(cell, value) for cell, value in writes])
@@ -583,7 +583,7 @@ class AsyncModel:
 
     async def read(self, node: Any) -> tuple[str, Any]:
         try:
-            if isinstance(node, AsyncCellHandle):
+            if isinstance(node, AsyncSource):
                 return _ok(node.get())
             return _ok(await self.ctx.get_async(node))
         except ComputeFailed:
@@ -597,10 +597,10 @@ class AsyncModel:
     async def dispose(self, node: Any) -> None:
         if isinstance(node, AsyncEffectHandle):
             await node.dispose_async()
-        elif isinstance(node, AsyncCellHandle):
-            self.ctx.dispose_cell(node)
+        elif isinstance(node, AsyncSource):
+            self.ctx.dispose_source(node)
         else:
-            self.ctx.dispose_slot(node)
+            self.ctx.dispose_computed(node)
 
     async def begin_scope(self, name: str) -> None:
         self.scopes[name] = self.ctx.scope()
@@ -911,7 +911,7 @@ async def _replay(
                 "effect"
                 if model.is_effect(handle)
                 else "cell"
-                if isinstance(handle, (Cell, AsyncCellHandle))
+                if isinstance(handle, (Cell, AsyncSource))
                 else "slot"
             )
             assert got_kind == want_kind, (

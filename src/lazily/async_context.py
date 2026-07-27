@@ -23,7 +23,7 @@ single primitive cannot own by itself:
 
 **What this module deliberately is not.** It is *not* a node arena. ``lazily-rs``
 models its async context as a table of nodes addressed by integer handles, so
-its context necessarily carries ``dispose_slot``/``dispose_cell``, teardown
+its context necessarily carries ``dispose_computed``/``dispose_source``, teardown
 scopes, and degree introspection. In ``lazily-py`` every reactive primitive is a
 real object that owns its own state, disposal is handle-side
 (:meth:`AsyncEffectHandle.dispose_async`, matching :meth:`lazily.effect.Effect.dispose`),
@@ -46,10 +46,13 @@ from __future__ import annotations
 __all__ = [
     "AsyncCellHandle",
     "AsyncComputeContext",
+    "AsyncComputed",
+    "AsyncComputedState",
     "AsyncContext",
     "AsyncContextDisposedError",
     "AsyncEffectHandle",
     "AsyncSlotHandle",
+    "AsyncSource",
     "AsyncTeardownScope",
 ]
 
@@ -74,7 +77,7 @@ class AsyncContextDisposedError(RuntimeError):
     """Raised when an async read is attempted on a disposed context."""
 
 
-class AsyncCellHandle[T]:
+class AsyncSource[T]:
     """A mutable input cell on the async graph — the *synchronous* input layer.
 
     Writes are synchronous and invalidate the dependent cone (or queue it, inside
@@ -118,10 +121,10 @@ class AsyncCellHandle[T]:
             self._ctx._invalidate_dependents(self)
 
     def __repr__(self) -> str:
-        return f"AsyncCellHandle({self._value!r})"
+        return f"AsyncSource({self._value!r})"
 
 
-class AsyncSlotHandle[T]:
+class AsyncComputed[T]:
     """A computed async slot: a lazily-computed, memoized, awaited derived value.
 
     The lifecycle is *not* reimplemented here — it is delegated wholesale to
@@ -248,6 +251,16 @@ class AsyncSlotHandle[T]:
         if dependency not in self._dependencies:
             self._dependencies.add(dependency)
             self._ctx._dependents.setdefault(dependency, set()).add(self)
+
+
+# Published v1 compatibility names are aliases, not subclasses. Identity is
+# load-bearing for isinstance checks and native/mypyc callers.
+AsyncCellHandle = AsyncSource
+AsyncSlotHandle = AsyncComputed
+
+# Public value-oriented projection of the formal storage-oriented slot state.
+# `SlotState` remains the runtime/formal compatibility name.
+AsyncComputedState = SlotState
 
 
 class AsyncEffectHandle:
@@ -379,12 +392,12 @@ class AsyncComputeContext:
     __slots__ = ("_ctx", "_node")
 
     def __init__(
-        self, ctx: AsyncContext, node: AsyncSlotHandle[Any] | AsyncEffectHandle
+        self, ctx: AsyncContext, node: AsyncComputed[Any] | AsyncEffectHandle
     ) -> None:
         self._ctx = ctx
         self._node = node
 
-    def get_cell[T](self, cell: AsyncCellHandle[T]) -> T:
+    def get_cell[T](self, cell: AsyncSource[T]) -> T:
         """Deprecated: use :meth:`get`, which reads both source and computed
         handles. Reads a cell synchronously, recording it as a dependency."""
         warnings.warn(
@@ -395,16 +408,16 @@ class AsyncComputeContext:
         self._node._track(cell)
         return cell.get()
 
-    async def get_async[T](self, slot: AsyncSlotHandle[T]) -> T:
+    async def get_async[T](self, slot: AsyncComputed[T]) -> T:
         """Await a slot's value, recording the edge *before* the awaited read."""
         self._node._track(slot)
         return await slot.get_async()
 
-    def get[T](self, handle: AsyncCellHandle[T] | AsyncSlotHandle[T]) -> T | None:
+    def get[T](self, handle: AsyncSource[T] | AsyncComputed[T]) -> T | None:
         """Non-blocking cached read of a **source cell or computed slot**,
         recording it as a dependency. The unified reader: a source
-        (:class:`AsyncCellHandle`) returns its current value; a computed
-        (:class:`AsyncSlotHandle`) returns its cached value or ``None``."""
+        (:class:`AsyncSource`) returns its current value; a computed
+        (:class:`AsyncComputed`) returns its cached value or ``None``."""
         self._node._track(handle)
         return handle.get()
 
@@ -432,7 +445,7 @@ class AsyncContext:
     def __init__(self) -> None:
         self._dependents: dict[object, set[Any]] = {}
         self._effects: set[AsyncEffectHandle] = set()
-        self._slots: set[AsyncSlotHandle[Any]] = set()
+        self._slots: set[AsyncComputed[Any]] = set()
         self._disposed = False
         self._depth = 0
         self._batch_queue: list[object] = []
@@ -443,36 +456,36 @@ class AsyncContext:
 
     # -- handles --------------------------------------------------------- #
 
-    def source[T](self, value: T) -> AsyncCellHandle[T]:
+    def source[T](self, value: T) -> AsyncSource[T]:
         """Create a mutable source (input) cell — the canonical constructor."""
-        return AsyncCellHandle(self, value)
+        return AsyncSource(self, value)
 
-    def cell[T](self, value: T) -> AsyncCellHandle[T]:
+    def cell[T](self, value: T) -> AsyncSource[T]:
         """Deprecated v1 alias for :meth:`source`."""
         warnings.warn(
             "cell() is deprecated; use source() instead",
             DeprecationWarning,
             stacklevel=2,
         )
-        return AsyncCellHandle(self, value)
+        return AsyncSource(self, value)
 
-    def get[T](self, handle: AsyncCellHandle[T] | AsyncSlotHandle[T]) -> T | None:
+    def get[T](self, handle: AsyncSource[T] | AsyncComputed[T]) -> T | None:
         """Read a **source cell or computed slot** (synchronous cached read).
 
         The unified reader over both handle kinds: a source
-        (:class:`AsyncCellHandle`) returns its current value; a computed
-        (:class:`AsyncSlotHandle`) returns its cached value or ``None`` (the warm
+        (:class:`AsyncSource`) returns its current value; a computed
+        (:class:`AsyncComputed`) returns its cached value or ``None`` (the warm
         fast path — never spawns a computation)."""
         return handle.get()
 
-    def set[T](self, handle: AsyncCellHandle[T], value: T) -> None:
+    def set[T](self, handle: AsyncSource[T], value: T) -> None:
         """Write a **source cell** and invalidate dependents. Only source handles
         are writable — a computed slot has no ``set`` (write protection). Inside a
         :meth:`batch`, the invalidation is queued and fires once at the outermost
         boundary."""
         handle.set(value)
 
-    def get_cell[T](self, handle: AsyncCellHandle[T]) -> T:
+    def get_cell[T](self, handle: AsyncSource[T]) -> T:
         """Deprecated: use :meth:`get`. Read a cell's value (synchronous)."""
         warnings.warn(
             "get_cell() is deprecated; use get() instead",
@@ -481,7 +494,7 @@ class AsyncContext:
         )
         return handle.get()
 
-    def set_cell[T](self, handle: AsyncCellHandle[T], value: T) -> None:
+    def set_cell[T](self, handle: AsyncSource[T], value: T) -> None:
         """Deprecated: use :meth:`set`. Update a cell and invalidate dependents."""
         warnings.warn(
             "set_cell() is deprecated; use set() instead",
@@ -490,47 +503,90 @@ class AsyncContext:
         )
         handle.set(value)
 
-    def computed_async[T](
+    def computed[T](
         self, compute: Callable[[AsyncComputeContext], Awaitable[T]]
-    ) -> AsyncSlotHandle[T]:
+    ) -> AsyncComputed[T]:
         """Create an async computed slot."""
-        slot: AsyncSlotHandle[T] = AsyncSlotHandle(self, compute)
+        slot: AsyncComputed[T] = AsyncComputed(self, compute)
         self._slots.add(slot)
         return slot
+
+    def computed_with_equals[T](
+        self,
+        compute: Callable[[AsyncComputeContext], Awaitable[T]],
+        eq: Callable[[T, T], bool],
+    ) -> AsyncComputed[T]:
+        """Like :meth:`computed` with an equality memo guard: a recompute
+        yielding an equal value republishes the *previous* value object."""
+        slot: AsyncComputed[T] = AsyncComputed(self, compute, eq=eq)
+        self._slots.add(slot)
+        return slot
+
+    def computed_async[T](
+        self, compute: Callable[[AsyncComputeContext], Awaitable[T]]
+    ) -> AsyncComputed[T]:
+        """Deprecated v1 alias for :meth:`computed`."""
+        warnings.warn(
+            "computed_async() is deprecated; use computed() instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.computed(compute)
 
     def memo_async[T](
         self,
         compute: Callable[[AsyncComputeContext], Awaitable[T]],
         eq: Callable[[T, T], bool],
-    ) -> AsyncSlotHandle[T]:
-        """Like :meth:`computed_async` with an equality memo guard: a recompute
-        yielding an equal value republishes the *previous* value object."""
-        slot: AsyncSlotHandle[T] = AsyncSlotHandle(self, compute, eq=eq)
-        self._slots.add(slot)
-        return slot
+    ) -> AsyncComputed[T]:
+        """Deprecated guarded-computed constructor.
 
-    def computed_ripple_when_async[T](
+        ``memo`` is not a third async node kind.
+        """
+        warnings.warn(
+            "memo_async() is deprecated; use computed_with_equals() instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.computed_with_equals(compute, eq)
+
+    def computed_ripple_when[T](
         self,
         compute: Callable[[AsyncComputeContext], Awaitable[T]],
         changed: Callable[[T, T], bool],
-    ) -> AsyncSlotHandle[T]:
-        """Async :meth:`computed_async` with an explicit **propagate** predicate.
+    ) -> AsyncComputed[T]:
+        """Async :meth:`computed` with an explicit **propagate** predicate.
 
         The async mirror of the single-threaded
         :func:`lazily.signal.computed_ripple_when`: propagation is gated by
         ``changed(old, new)`` — ``True`` propagates the recompute downstream,
         ``False`` suppresses it (the previous value object is republished, as with
-        :meth:`memo_async`). It composes over the memo guard by negation, since
+        :meth:`computed_with_equals`). It composes over the memo guard by negation, since
         the memo guard's ``eq`` is "equal = suppress" and ``changed`` is its
-        complement: ``computed_async(f)`` ~ ``computed_ripple_when_async(f,
+        complement: ``computed(f)`` ~ ``computed_ripple_when(f,
         !=)`` and the always-propagate ``changed`` is the pass-through.
 
         ``changed`` MUST be a **pure** function of ``(old, new)`` — value-carried
         state (a version/counter field) is fine, external mutable state is not.
         """
-        return self.memo_async(compute, lambda old, new: not changed(old, new))
+        return self.computed_with_equals(
+            compute, lambda old, new: not changed(old, new)
+        )
 
-    async def get_async[T](self, handle: AsyncSlotHandle[T]) -> T:
+    def computed_ripple_when_async[T](
+        self,
+        compute: Callable[[AsyncComputeContext], Awaitable[T]],
+        changed: Callable[[T, T], bool],
+    ) -> AsyncComputed[T]:
+        """Deprecated v1 alias for :meth:`computed_ripple_when`."""
+        warnings.warn(
+            "computed_ripple_when_async() is deprecated; "
+            "use computed_ripple_when() instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.computed_ripple_when(compute, changed)
+
+    async def get_async[T](self, handle: AsyncComputed[T]) -> T:
         """Await a slot's value."""
         return await handle.get_async()
 
@@ -551,7 +607,7 @@ class AsyncContext:
 
     # -- per-node disposal (#lzspecedgeindex) ---------------------------- #
 
-    def dispose_slot(self, handle: AsyncSlotHandle[Any]) -> None:
+    def dispose_computed(self, handle: AsyncComputed[Any]) -> None:
         """Tear down one computed slot: detach both edge directions, discard any
         in-flight computation, and dirty whatever still reads it.
 
@@ -575,9 +631,9 @@ class AsyncContext:
                 dependent._dependencies.discard(handle)
             self._dirty_disposed_dependents(dependents)
 
-    def dispose_cell(self, handle: AsyncCellHandle[Any]) -> None:
+    def dispose_source(self, handle: AsyncSource[Any]) -> None:
         """Tear down one source cell. Cells read nothing, so only the downstream
-        direction needs detaching. Same contract as :meth:`dispose_slot`."""
+        direction needs detaching. Same contract as :meth:`dispose_computed`."""
         if handle._disposed:
             return
         handle._disposed = True
@@ -586,6 +642,24 @@ class AsyncContext:
             for dependent in dependents:
                 dependent._dependencies.discard(handle)
             self._dirty_disposed_dependents(dependents)
+
+    def dispose_slot(self, handle: AsyncComputed[Any]) -> None:
+        """Deprecated v1 alias for :meth:`dispose_computed`."""
+        warnings.warn(
+            "dispose_slot() is deprecated; use dispose_computed() instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self.dispose_computed(handle)
+
+    def dispose_cell(self, handle: AsyncSource[Any]) -> None:
+        """Deprecated v1 alias for :meth:`dispose_source`."""
+        warnings.warn(
+            "dispose_cell() is deprecated; use dispose_source() instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self.dispose_source(handle)
 
     def _dirty_disposed_dependents(self, roots: builtins.set[Any]) -> None:
         """Mark the surviving dependent cone stale — and schedule nothing.
@@ -721,7 +795,7 @@ class AsyncTeardownScope:
     on the floor::
 
         async with ctx.scope() as conn:
-            doubled = conn.computed_async(...)
+            doubled = conn.computed(...)
             conn.effect_async(...)
         # disposed here, in reverse creation order, cleanups awaited
 
@@ -738,15 +812,15 @@ class AsyncTeardownScope:
 
     # -- membership ------------------------------------------------------ #
 
-    def source[T](self, value: T) -> AsyncCellHandle[T]:
+    def source[T](self, value: T) -> AsyncSource[T]:
         """Create a source cell owned by this scope."""
         return self.adopt(self._ctx.source(value))
 
-    def computed_async[T](
+    def computed[T](
         self, compute: Callable[[AsyncComputeContext], Awaitable[T]]
-    ) -> AsyncSlotHandle[T]:
+    ) -> AsyncComputed[T]:
         """Create a computed slot owned by this scope."""
-        return self.adopt(self._ctx.computed_async(compute))
+        return self.adopt(self._ctx.computed(compute))
 
     def effect_async(
         self, body: Callable[[AsyncComputeContext], Awaitable[Any]]
@@ -791,10 +865,10 @@ class AsyncTeardownScope:
         for node in reversed(owned):
             if isinstance(node, AsyncEffectHandle):
                 await node.dispose_async()
-            elif isinstance(node, AsyncCellHandle):
-                ctx.dispose_cell(node)
+            elif isinstance(node, AsyncSource):
+                ctx.dispose_source(node)
             else:
-                ctx.dispose_slot(node)
+                ctx.dispose_computed(node)
 
     async def __aenter__(self) -> AsyncTeardownScope:
         return self
