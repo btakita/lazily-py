@@ -19,7 +19,7 @@ def test_broadcast_cursor_isolation() -> None:
     assert topic.publish("b") == 1
     assert topic.read_stream("alice") == ["a", "b"]
     assert topic.read_stream("bob") == ["a", "b"]
-    assert topic.advance("alice") == 1
+    assert topic.advance("alice") == "a"
     assert topic.read_stream("alice") == ["b"]
     assert topic.read_stream("bob") == ["a", "b"]
 
@@ -30,8 +30,8 @@ def test_durable_replay_and_safe_gc() -> None:
     topic.subscribe("slow")
     topic.publish("a")
     topic.publish("b")
-    topic.advance("fast", 2)
-    topic.advance("slow")
+    assert topic.advance("fast", 2) == "a"
+    assert topic.advance("slow") == "a"
     topic.disconnect("slow")
     topic.publish("c")
     assert topic.gc() == 1
@@ -48,7 +48,7 @@ def test_ephemeral_disconnect_does_not_hold_gc() -> None:
     topic.subscribe("durable", TopicDurability.Durable)
     topic.subscribe("viewer", TopicDurability.Ephemeral)
     topic.publish("a")
-    topic.advance("durable")
+    assert topic.advance("durable") == "a"
     topic.disconnect("viewer")
     assert topic.subscription("viewer") is None
     assert topic.gc() == 1
@@ -64,13 +64,13 @@ def test_tail_and_offline_advance_are_noops() -> None:
     topic: TopicCell[str] = TopicCell({})
     topic.subscribe("worker")
     topic.publish("a")
-    assert topic.advance("worker") == 1
-    assert topic.advance("worker") == 1
+    assert topic.advance("worker") == "a"
+    assert topic.advance("worker") is None
 
     topic.disconnect("worker")
     topic.publish("b")
     assert topic.read_stream("worker") == []
-    assert topic.advance("worker") == 1
+    assert topic.advance("worker") is None
     worker = topic.subscription("worker")
     assert worker is not None and worker.cursor == 1
 

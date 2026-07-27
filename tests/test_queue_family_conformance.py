@@ -1,27 +1,28 @@
-"""The queue-family flavor ledger — enforced against the source, not a comment.
+"""Canonical queue-family fixtures replayed against all three Python flavors.
 
-``test_queue_conformance.py`` replays the canonical ``queuecell_*.json`` corpus
-against the single-threaded ``QueueCell``. That is currently the only flavor: no
-binding in the family ships a thread-safe or async queue primitive, and
-``cell-model.md`` § "Core surface vs. binding extensions (queue family)" now makes
-those Core, so their absence is a conformance gap rather than an unfinished
-nicety.
-
-A three-flavor replay written today would therefore skip two of three flavors
-entirely, and a suite that skips almost everything while reporting green is
-exactly the failure this file exists to prevent. So the ledger is wired to the
-source: it greps ``src/lazily`` for each unshipped flavor's class name, and the
-moment one appears this goes red and names the runner to extend.
-
-Mirrors ``lazily-rs/tests/queue_family_conformance.rs``.
+Every one of the eleven ``QueueCell`` / ``TopicCell`` / ``WorkQueueCell``
+fixtures runs against the single-threaded, thread-safe, and async shells.
+Invalidation is read from ``steps[].expected.invalidates`` and measured by a
+counter inside the reader's own computed body.  This deliberately avoids the
+two false-green shapes found during the ReactiveMap rollout: checking runner
+bookkeeping, or accepting a zero-step/zero-matrix replay.
 """
 
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import pytest
+
+import lazily
+
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 _SPEC = (
@@ -37,112 +38,509 @@ QUEUE_FIXTURES = (
     "queuecell_bounded_backpressure.json",
     "queuecell_closure_lifecycle.json",
 )
+TOPIC_FIXTURES = (
+    "topiccell_broadcast_cursor_isolation.json",
+    "topiccell_durable_replay_gc.json",
+    "topiccell_ephemeral_lifecycle.json",
+    "topiccell_offline_tail_bounds.json",
+)
+WORK_QUEUE_FIXTURES = (
+    "workqueue_competing_delivery.json",
+    "workqueue_lease_deadletter.json",
+)
+ALL_FIXTURES = QUEUE_FIXTURES + TOPIC_FIXTURES + WORK_QUEUE_FIXTURES
 
-# (flavor name, the class name that proves it exists, shipped?)
-#
-# The marker is grepped rather than imported: importing a class that does not
-# exist would fail at collection time, and a ledger you cannot write until the
-# work is done is no ledger at all.
+
+class _Flavor:
+    name: str
+    queue_cls: type[Any]
+    topic_cls: type[Any]
+    work_queue_cls: type[Any]
+
+
+class SyncFlavor(_Flavor):
+    name = "sync"
+    queue_cls = lazily.QueueCell
+    topic_cls = lazily.TopicCell
+    work_queue_cls = lazily.WorkQueueCell
+
+
+class ThreadSafeFlavor(_Flavor):
+    name = "thread-safe"
+    queue_cls = lazily.ThreadSafeQueueCell
+    topic_cls = lazily.ThreadSafeTopicCell
+    work_queue_cls = lazily.ThreadSafeWorkQueueCell
+
+
+class AsyncFlavor(_Flavor):
+    name = "async"
+    queue_cls = lazily.AsyncQueueCell
+    topic_cls = lazily.AsyncTopicCell
+    work_queue_cls = lazily.AsyncWorkQueueCell
+
+
+FLAVORS = (SyncFlavor, ThreadSafeFlavor, AsyncFlavor)
+
+# (primitive, flavor, source marker, shipped)
 LEDGER = (
-    ("single-threaded", "class QueueCell", True),
-    ("thread-safe", "ThreadSafeQueueCell", False),
-    ("async", "AsyncQueueCell", False),
+    ("queue", "sync", "class QueueCell", True),
+    ("queue", "thread-safe", "class ThreadSafeQueueCell", True),
+    ("queue", "async", "class AsyncQueueCell", True),
+    ("topic", "sync", "class TopicCell", True),
+    ("topic", "thread-safe", "class ThreadSafeTopicCell", True),
+    ("topic", "async", "class AsyncTopicCell", True),
+    ("work-queue", "sync", "class WorkQueueCell", True),
+    ("work-queue", "thread-safe", "class ThreadSafeWorkQueueCell", True),
+    ("work-queue", "async", "class AsyncWorkQueueCell", True),
 )
 
 
-def _sources() -> str:
-    return "\n".join(p.read_text() for p in _SRC.rglob("*.py"))
+def _load(name: str) -> dict[str, Any]:
+    path = _SPEC / name
+    if not path.exists():
+        path = _LOCAL / name
+    if not path.exists():
+        pytest.skip(f"canonical collections fixture not found: {name}")
+    return json.loads(path.read_text())
 
 
-def _fixture_dir() -> Path | None:
-    if _SPEC.is_dir():
-        return _SPEC
-    if _LOCAL.is_dir():
-        return _LOCAL
-    return None
+class _Counter:
+    """A reactive reader whose own compute body records recomputation."""
+
+    def __init__(self, ctx: dict, body: Callable[[Any], Any]) -> None:
+        self.count = 0
+
+        def compute(view: Any) -> Any:
+            self.count += 1
+            return body(view)
+
+        self._node = lazily.computed(ctx, compute)
+
+    def drive(self) -> int:
+        self._node.get()
+        return self.count
 
 
-def test_unshipped_flavors_are_really_absent() -> None:
-    """The ledger is enforced, not advisory.
-
-    When a ``ThreadSafeQueueCell`` or ``AsyncQueueCell`` lands, this fails and says
-    what to do — so a newly-shipped flavor cannot sit silently unreplayed while the
-    suite reports green.
-    """
-    sources = _sources()
-    assert sources, "read no sources from src/lazily; the ledger check would be vacuous"
-
-    for name, marker, shipped in LEDGER:
-        defined = marker in sources
-        if shipped:
-            assert defined, (
-                f"flavor {name!r} is recorded as shipped but {marker!r} is not defined "
-                "in src/lazily — the ledger claims coverage this package does not have"
-            )
-        else:
-            assert not defined, (
-                f"flavor {name!r} now EXISTS in src/lazily ({marker!r}) but the "
-                "queue-family ledger still records it as unshipped, so the canonical "
-                "corpus is not being replayed against it.\n\n"
-                f"Fix: flip the {name!r} entry to shipped in LEDGER *and* extend the "
-                "replay to drive it, exactly as test_collection_family_conformance.py "
-                "drives all three map flavors. Do NOT flip the flag alone — that "
-                "restores the false green this test exists to prevent."
-            )
-
-
-def test_ledger_is_not_all_skips() -> None:
-    """A runner that skips everything must fail: in a summary line, "skipped" and
-    "passed" are indistinguishable."""
-    assert sum(1 for *_, shipped in LEDGER if shipped) > 0, (
-        "every queue flavor is recorded as unshipped, so this suite would assert "
-        "nothing while still reporting success"
-    )
-    assert len(LEDGER) == 3, (
-        "the ledger must cover all three execution flavors; a missing entry is an "
-        "unscored gap, not an absent one"
-    )
-
-
-def test_shipped_flavor_replays_the_corpus() -> None:
-    """Positive proof this test module read the corpus.
-
-    An absence guard proves the fixtures exist on disk; only a non-zero count
-    proves they were opened.
-    """
-    directory = _fixture_dir()
-    if directory is None:
-        pytest.skip("canonical collections fixtures not found")
-
-    fixtures_read = steps_seen = matrices_seen = 0
-    for name in QUEUE_FIXTURES:
-        path = directory / name
-        assert path.exists(), f"{name}: declared queue fixture is missing"
-        fixture = json.loads(path.read_text())
-        fixtures_read += 1
-
-        steps = fixture.get("steps") or []
-        assert steps, (
-            f"{name}: fixture has no steps - a vacuous replay would report green"
+def _assert_invalidation(
+    where: str,
+    readers: dict[str, _Counter],
+    baseline: dict[str, int],
+    invalidates: dict[str, bool],
+) -> None:
+    # An explicit empty object is the canonical "no reader invalidates"
+    # matrix.  Assert every already-minted reader in that case so `{}` is not
+    # treated as "skip invalidation checks".
+    expected = invalidates or dict.fromkeys(readers, False)
+    for name, should_invalidate in expected.items():
+        assert name in readers, f"{where}: fixture names unknown reader {name!r}"
+        after = readers[name].drive()
+        delta = after - baseline[name]
+        assert delta == int(should_invalidate), (
+            f"{where}: reader {name!r} recomputed {delta} times; "
+            f"expected invalidates={should_invalidate}"
         )
-        steps_seen += len(steps)
 
-        for i, step in enumerate(steps):
-            # The matrix nests under `expected`, NOT on the step. lazily-rs's MAP
-            # runner read it off the step, so it was always absent and the
-            # assertion never ran once. Pin the nesting so that cannot recur here.
-            assert "invalidates" not in step, (
-                f"{name} step {i}: `invalidates` appears at STEP level; the runners "
-                "read expected.invalidates, so a step-level copy is silently ignored"
-            )
-            expected = step.get("expected")
-            assert expected is not None, f"{name} step {i}: no expected block"
-            if "invalidates" in expected:
-                matrices_seen += 1
 
-    assert fixtures_read == len(QUEUE_FIXTURES)
-    assert steps_seen > 0, "read the corpus but saw zero steps"
-    assert matrices_seen > 0, (
-        "no fixture carried an expected.invalidates matrix - the reader-kind "
-        "independence contract would be unasserted"
+def _queue_initial(ctx: dict, cls: type[Any], initial: dict[str, Any]) -> Any:
+    capacity = initial.get("capacity")
+    storage = (
+        lazily.VecDequeStorage.with_capacity(capacity)
+        if capacity is not None
+        else lazily.VecDequeStorage()
     )
+    queue = cls(ctx, storage=storage)
+    for value in initial.get("elements", []):
+        assert queue.try_push(value) is None
+    if initial.get("closed"):
+        queue.close()
+    return queue
+
+
+def _queue_readers(ctx: dict, queue: Any) -> dict[str, _Counter]:
+    return {
+        "head": _Counter(ctx, lambda view: queue.head(view)),
+        "len": _Counter(ctx, lambda view: queue.len(view)),
+        "is_empty": _Counter(ctx, lambda view: queue.is_empty(view)),
+        "is_full": _Counter(ctx, lambda view: queue.is_full(view)),
+        "closed": _Counter(ctx, lambda view: queue.is_closed(view)),
+    }
+
+
+def _queue_return(result: Any) -> Any:
+    if isinstance(result, (lazily.QueuePopError, lazily.QueuePushError)):
+        return result.label
+    return result
+
+
+def _assert_queue_state(where: str, queue: Any, expected: dict[str, Any]) -> None:
+    observations = {
+        "elements": queue.elements,
+        "head": queue.head,
+        "len": queue.len,
+        "is_empty": queue.is_empty,
+        "is_full": queue.is_full,
+        "closed": queue.is_closed,
+    }
+    for name, observe in observations.items():
+        if name in expected:
+            assert observe() == expected[name], f"{where}: {name} mismatch"
+
+
+def _run_queue(flavor: type[_Flavor], fixture_name: str) -> tuple[int, int]:
+    fixture = _load(fixture_name)
+    ctx: dict = {}
+    queue = _queue_initial(ctx, flavor.queue_cls, fixture["initial"])
+    readers = _queue_readers(ctx, queue)
+    for reader in readers.values():
+        reader.drive()
+
+    steps = fixture.get("steps") or []
+    assert steps, f"{flavor.name} {fixture_name}: fixture has no steps"
+    matrices = 0
+    for index, step in enumerate(steps):
+        where = f"{flavor.name} {fixture_name} step {index}"
+        assert "invalidates" not in step, (
+            f"{where}: invalidates is at step level; expected.invalidates is canonical"
+        )
+        expected = step.get("expected")
+        assert expected is not None, f"{where}: expected block is missing"
+        invalidates = expected.get("invalidates")
+        assert invalidates is not None, f"{where}: invalidation matrix is missing"
+        matrices += 1
+
+        baseline = {name: reader.drive() for name, reader in readers.items()}
+        op = step["op"]
+        kind = op["type"]
+        result: Any = None
+        if kind in {"push", "try_push"}:
+            result = _queue_return(queue.try_push(op["value"]))
+        elif kind in {"pop", "try_pop"}:
+            result = _queue_return(queue.try_pop())
+        elif kind == "close":
+            queue.close()
+        elif kind == "batch":
+            inner_ops = op.get("ops") or []
+            assert inner_ops, f"{where}: batch contains no operations"
+
+            def apply_batch(
+                _ops: list[dict[str, Any]] = inner_ops,
+                _where: str = where,
+            ) -> None:
+                for inner in _ops:
+                    assert inner["type"] == "push", (
+                        f"{_where}: unsupported batch op {inner['type']!r}"
+                    )
+                    assert queue.try_push(inner["value"]) is None
+
+            lazily.batch(apply_batch)
+        else:
+            raise AssertionError(f"{where}: unknown queue op {kind!r}")
+
+        if "returns" in step:
+            assert result == step["returns"], (
+                f"{where}: returns {result!r}, expected {step['returns']!r}"
+            )
+        _assert_invalidation(where, readers, baseline, invalidates)
+        _assert_queue_state(where, queue, expected)
+
+    return len(steps), matrices
+
+
+def _topic_snapshot(initial: dict[str, Any]) -> lazily.TopicSnapshot[str]:
+    subscriptions = tuple(
+        lazily.TopicSubscriptionSnapshot(
+            subscriber_id,
+            int(saved["cursor"]),
+            lazily.TopicDurability(saved["durability"]),
+            bool(saved["connected"]),
+        )
+        for subscriber_id, saved in sorted(initial.get("subscriptions", {}).items())
+    )
+    return lazily.TopicSnapshot(
+        int(initial.get("base_offset", 0)),
+        tuple(initial.get("elements", [])),
+        subscriptions,
+    )
+
+
+def _topic_subscriber_ids(fixture: dict[str, Any]) -> set[str]:
+    ids = set(fixture["initial"].get("subscriptions", {}))
+    for step in fixture.get("steps", []):
+        op = step.get("op", {})
+        subscriber = op.get("subscriber")
+        if subscriber is not None:
+            ids.add(subscriber)
+        expected = step.get("expected", {})
+        ids.update(expected.get("subscriptions", {}))
+        ids.update(expected.get("invalidates", {}))
+    return ids
+
+
+def _topic_readers(
+    ctx: dict, topic: Any, subscriber_ids: set[str]
+) -> dict[str, _Counter]:
+    readers: dict[str, _Counter] = {}
+    for subscriber_id in sorted(subscriber_ids):
+        handle = topic.reader_handle(subscriber_id)
+        readers[subscriber_id] = _Counter(
+            ctx, lambda view, reader=handle: tuple(reader(view))
+        )
+    return readers
+
+
+def _assert_topic_state(where: str, topic: Any, expected: dict[str, Any]) -> None:
+    assert topic.base_offset == expected["base_offset"], f"{where}: base offset"
+    assert topic.elements() == expected["elements"], f"{where}: retained elements"
+    wanted_subscriptions = expected.get("subscriptions", {})
+    actual_ids = {saved.subscriber_id for saved in topic.snapshot().subscriptions}
+    assert actual_ids == set(wanted_subscriptions), f"{where}: subscriber ids"
+    for subscriber_id, wanted in wanted_subscriptions.items():
+        actual = topic.subscription(subscriber_id)
+        assert actual is not None, f"{where}: missing subscriber {subscriber_id!r}"
+        assert actual.cursor == wanted["cursor"], f"{where}: subscriber cursor"
+        assert actual.durability.value == wanted["durability"], (
+            f"{where}: subscriber durability"
+        )
+        assert actual.connected is wanted["connected"], (
+            f"{where}: subscriber connected flag"
+        )
+    for subscriber_id, wanted in expected.get("reads", {}).items():
+        assert topic.read_stream(subscriber_id) == wanted, (
+            f"{where}: subscriber {subscriber_id!r} read mismatch"
+        )
+
+
+def _run_topic(flavor: type[_Flavor], fixture_name: str) -> tuple[int, int]:
+    fixture = _load(fixture_name)
+    ctx: dict = {}
+    topic = flavor.topic_cls(ctx, _topic_snapshot(fixture["initial"]))
+    readers = _topic_readers(ctx, topic, _topic_subscriber_ids(fixture))
+    for reader in readers.values():
+        reader.drive()
+
+    steps = fixture.get("steps") or []
+    assert steps, f"{flavor.name} {fixture_name}: fixture has no steps"
+    matrices = 0
+    for index, step in enumerate(steps):
+        where = f"{flavor.name} {fixture_name} step {index}"
+        assert "invalidates" not in step, (
+            f"{where}: invalidates is at step level; expected.invalidates is canonical"
+        )
+        expected = step.get("expected")
+        assert expected is not None, f"{where}: expected block is missing"
+        invalidates = expected.get("invalidates")
+        assert invalidates is not None, f"{where}: invalidation matrix is missing"
+        matrices += 1
+
+        baseline = {name: reader.drive() for name, reader in readers.items()}
+        op = step["op"]
+        kind = op["type"]
+        result: Any = None
+        if kind == "publish":
+            result = topic.publish(op["value"])
+        elif kind == "advance":
+            result = topic.advance(op["subscriber"])
+        elif kind == "subscribe":
+            topic.subscribe(
+                op["subscriber"],
+                lazily.TopicDurability(op.get("durability", "durable")),
+            )
+        elif kind == "reconnect":
+            topic.reconnect(op["subscriber"])
+        elif kind == "disconnect":
+            topic.disconnect(op["subscriber"])
+        elif kind == "restart":
+            topic.restart()
+        elif kind == "gc":
+            result = topic.gc()
+        else:
+            raise AssertionError(f"{where}: unknown topic op {kind!r}")
+
+        if "returns" in step:
+            assert result == step["returns"], (
+                f"{where}: returns {result!r}, expected {step['returns']!r}"
+            )
+        _assert_invalidation(where, readers, baseline, invalidates)
+        _assert_topic_state(where, topic, expected)
+
+    return len(steps), matrices
+
+
+def _work_queue_config(fixture_name: str) -> tuple[int, int]:
+    if fixture_name == "workqueue_competing_delivery.json":
+        return 10, 3
+    if fixture_name == "workqueue_lease_deadletter.json":
+        return 10, 2
+    raise AssertionError(f"unknown work-queue fixture {fixture_name!r}")
+
+
+def _work_queue_readers(ctx: dict, queue: Any) -> dict[str, _Counter]:
+    handles = queue.reader_handles()
+    return {
+        "pending_len": _Counter(ctx, lambda view: handles.pending_len(view)),
+        "is_empty": _Counter(ctx, lambda view: handles.is_empty(view)),
+        "in_flight_len": _Counter(ctx, lambda view: handles.in_flight_len(view)),
+        "dead_letter_len": _Counter(ctx, lambda view: handles.dead_letter_len(view)),
+    }
+
+
+def _work_return(value: Any) -> Any:
+    if isinstance(value, lazily.WorkQueueDelivery):
+        return asdict(value)
+    return value
+
+
+def _work_items(queue: Any) -> list[dict[str, Any]]:
+    return [asdict(item) for item in queue.pending_items()]
+
+
+def _work_deliveries(queue: Any) -> list[dict[str, Any]]:
+    return [asdict(delivery) for delivery in queue.in_flight_deliveries()]
+
+
+def _work_dead_letters(queue: Any) -> list[dict[str, Any]]:
+    result = []
+    for dead in queue.dead_letter_items():
+        encoded = asdict(dead)
+        encoded["reason"] = dead.reason.value
+        result.append(encoded)
+    return result
+
+
+def _assert_work_state(where: str, queue: Any, expected: dict[str, Any]) -> None:
+    assert _work_items(queue) == expected["pending"], f"{where}: pending"
+    assert _work_deliveries(queue) == expected["in_flight"], f"{where}: in flight"
+    assert _work_dead_letters(queue) == expected["dead_letters"], (
+        f"{where}: dead letters"
+    )
+    reads = expected["reads"]
+    assert queue.pending_len() == reads["pending_len"], f"{where}: pending_len"
+    assert queue.is_empty() is reads["is_empty"], f"{where}: is_empty"
+    assert queue.in_flight_len() == reads["in_flight_len"], f"{where}: in_flight_len"
+    assert queue.dead_letter_len() == reads["dead_letter_len"], (
+        f"{where}: dead_letter_len"
+    )
+
+
+def _run_work_queue(flavor: type[_Flavor], fixture_name: str) -> tuple[int, int]:
+    fixture = _load(fixture_name)
+    assert fixture["initial"] == {
+        "pending": [],
+        "in_flight": [],
+        "dead_letters": [],
+    }, f"{fixture_name}: unsupported non-empty initial work queue"
+    visibility_timeout, max_deliveries = _work_queue_config(fixture_name)
+    ctx: dict = {}
+    queue = flavor.work_queue_cls(
+        ctx,
+        visibility_timeout=visibility_timeout,
+        max_deliveries=max_deliveries,
+    )
+    readers = _work_queue_readers(ctx, queue)
+    for reader in readers.values():
+        reader.drive()
+
+    steps = fixture.get("steps") or []
+    assert steps, f"{flavor.name} {fixture_name}: fixture has no steps"
+    matrices = 0
+    for index, step in enumerate(steps):
+        where = f"{flavor.name} {fixture_name} step {index}"
+        assert "invalidates" not in step, (
+            f"{where}: invalidates is at step level; expected.invalidates is canonical"
+        )
+        expected = step.get("expected")
+        assert expected is not None, f"{where}: expected block is missing"
+        invalidates = expected.get("invalidates")
+        assert invalidates is not None, f"{where}: invalidation matrix is missing"
+        matrices += 1
+
+        baseline = {name: reader.drive() for name, reader in readers.items()}
+        op = step["op"]
+        kind = op["type"]
+        if kind == "push":
+            result: Any = queue.push(op["value"])
+        elif kind == "claim":
+            result = queue.claim(op["worker"], op["now"])
+        elif kind == "ack":
+            result = queue.ack(op["worker"], op["delivery_id"])
+        elif kind == "nack":
+            result = queue.nack(op["worker"], op["delivery_id"])
+        elif kind == "reap_expired":
+            result = queue.reap_expired(op["now"])
+        else:
+            raise AssertionError(f"{where}: unknown work-queue op {kind!r}")
+
+        assert _work_return(result) == step.get("returns"), (
+            f"{where}: returns {_work_return(result)!r}, "
+            f"expected {step.get('returns')!r}"
+        )
+        _assert_invalidation(where, readers, baseline, invalidates)
+        _assert_work_state(where, queue, expected)
+
+    return len(steps), matrices
+
+
+def test_ledger_matches_all_nine_shipped_flavors() -> None:
+    sources = "\n".join(path.read_text() for path in _SRC.rglob("*.py"))
+    assert sources, "read no sources from src/lazily; ledger check is vacuous"
+    assert len(LEDGER) == 9, "ledger must cover primitive x flavor (3 x 3)"
+    assert all(shipped for *_, shipped in LEDGER), (
+        "Python now ships all queue-family flavors; staged skips are stale"
+    )
+    for primitive, flavor, marker, shipped in LEDGER:
+        assert (marker in sources) is shipped, (
+            f"{primitive}/{flavor}: source marker {marker!r} and ledger disagree"
+        )
+
+
+@pytest.mark.parametrize("flavor", FLAVORS, ids=lambda flavor: flavor.name)
+@pytest.mark.parametrize("fixture_name", QUEUE_FIXTURES)
+def test_queue_fixture_all_flavors(flavor: type[_Flavor], fixture_name: str) -> None:
+    steps, matrices = _run_queue(flavor, fixture_name)
+    assert steps > 0 and matrices == steps
+
+
+@pytest.mark.parametrize("flavor", FLAVORS, ids=lambda flavor: flavor.name)
+@pytest.mark.parametrize("fixture_name", TOPIC_FIXTURES)
+def test_topic_fixture_all_flavors(flavor: type[_Flavor], fixture_name: str) -> None:
+    steps, matrices = _run_topic(flavor, fixture_name)
+    assert steps > 0 and matrices == steps
+
+
+@pytest.mark.parametrize("flavor", FLAVORS, ids=lambda flavor: flavor.name)
+@pytest.mark.parametrize("fixture_name", WORK_QUEUE_FIXTURES)
+def test_work_queue_fixture_all_flavors(
+    flavor: type[_Flavor], fixture_name: str
+) -> None:
+    steps, matrices = _run_work_queue(flavor, fixture_name)
+    assert steps > 0 and matrices == steps
+
+
+def test_thread_safe_family_serializes_concurrent_mutators() -> None:
+    ctx: dict = {}
+
+    queue = lazily.ThreadSafeQueueCell[int](ctx)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        assert all(result is None for result in pool.map(queue.try_push, range(128)))
+    assert queue.len() == 128
+    assert sorted(queue.elements()) == list(range(128))
+
+    topic = lazily.ThreadSafeTopicCell[int](ctx)
+    topic.subscribe("reader")
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(topic.publish, range(128)))
+    assert sorted(topic.read_stream("reader")) == list(range(128))
+
+    work = lazily.ThreadSafeWorkQueueCell[int](
+        ctx, visibility_timeout=10, max_deliveries=3
+    )
+    for value in range(128):
+        work.push(value)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        deliveries = list(
+            pool.map(lambda worker: work.claim(str(worker), 0), range(128))
+        )
+    assert all(delivery is not None for delivery in deliveries)
+    assert len({delivery.item_id for delivery in deliveries if delivery}) == 128
+    assert work.pending_len() == 0
+    assert work.in_flight_len() == 128

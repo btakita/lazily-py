@@ -83,14 +83,14 @@ notes and platform carve-outs lives in
 | Memoized semantic tree (`SemTree`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Stable-id alignment (manufactured identity) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Reactive queue (`QueueCell` SPSC/MPSC + `QueueStorage` adapter) **Core surface** — single-threaded flavor | ✅ | ✅ | ✅ | ~ | ✅ | ~ | ✅ | ✅ | — |
-| Reactive queue (`QueueCell` SPSC/MPSC + `QueueStorage` adapter) **Core surface** — thread-safe flavor (reader kinds + closure lifecycle) | ✅ | — | — | — | — | — | — | — | — |
-| Reactive queue (`QueueCell` SPSC/MPSC + `QueueStorage` adapter) **Core surface** — async flavor (reader kinds + eventual transparency) | ✅ | — | — | — | — | — | — | — | — |
+| Reactive queue (`QueueCell` SPSC/MPSC + `QueueStorage` adapter) **Core surface** — thread-safe flavor (reader kinds + closure lifecycle) | ✅ | ✅ | — | — | — | — | — | — | — |
+| Reactive queue (`QueueCell` SPSC/MPSC + `QueueStorage` adapter) **Core surface** — async flavor (reader kinds + eventual transparency) | ✅ | ✅ | — | — | — | — | — | — | — |
 | Broadcast topic (`TopicCell`) **Core surface** — single-threaded flavor — independent cursors + durable replay + safe GC (`#lztopiccell`) | ✅ | ✅ | ✅ | ~ | ✅ | ~ | ✅ | ✅ | — |
-| Broadcast topic (`TopicCell`) **Core surface** — thread-safe flavor (reader kinds + closure lifecycle) | ✅ | — | — | — | — | — | — | — | — |
-| Broadcast topic (`TopicCell`) **Core surface** — async flavor (reader kinds + eventual transparency) | ✅ | — | — | — | — | — | — | — | — |
+| Broadcast topic (`TopicCell`) **Core surface** — thread-safe flavor (reader kinds + closure lifecycle) | ✅ | ✅ | — | — | — | — | — | — | — |
+| Broadcast topic (`TopicCell`) **Core surface** — async flavor (reader kinds + eventual transparency) | ✅ | ✅ | — | — | — | — | — | — | — |
 | Competing-consumer work queue (`WorkQueueCell`) **Core surface** — single-threaded flavor — exclusive leases + ack/nack + redelivery + DLQ (`#lzworkqueue`) | ✅ | ✅ | ✅ | ~ | ✅ | ~ | ✅ | ✅ | — |
-| Competing-consumer work queue (`WorkQueueCell`) **Core surface** — thread-safe flavor (reader kinds + closure lifecycle) | ✅ | — | — | — | — | — | — | — | — |
-| Competing-consumer work queue (`WorkQueueCell`) **Core surface** — async flavor (reader kinds + eventual transparency) | ✅ | — | — | — | — | — | — | — | — |
+| Competing-consumer work queue (`WorkQueueCell`) **Core surface** — thread-safe flavor (reader kinds + closure lifecycle) | ✅ | ✅ | — | — | — | — | — | — | — |
+| Competing-consumer work queue (`WorkQueueCell`) **Core surface** — async flavor (reader kinds + eventual transparency) | ✅ | ✅ | — | — | — | — | — | — | — |
 | Merge algebra + `Source<T, M>` — associative `MergePolicy` (`KeepLatest`/`Sum`/`Max`/`SetUnion`/`RawFifo`), `Cell ≡ Source<KeepLatest>`, read-any-cell/write-`Source` split (`#relaycell`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | RelayCell — conflating relay + `BackpressurePolicy` + `SpillStore` + `Transport` + Inbox/Outbox + Rate/Window/Expiry/Priority/keyed policies (`#relaycell`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
 | Free-text character CRDT (`TextCrdt`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
@@ -313,12 +313,17 @@ full compliance surface.
 
 `QueueCell` is a FIFO collection composed of reactive cells — **not a new cell
 kind** — that adds queue semantics (push to tail, pop from head) to the reactive
-graph. It is an SPSC primitive; MPSC is a *usage rule* on the same primitive —
-multiple producers push inside one `batch`, which serializes the pushes into a
-deterministic order. The reactive shell wraps a pluggable `QueueStorage` backend
-(default `VecDequeStorage`); the shell owns the reader-kind version cells and
-invalidates by reader kind — a push to a non-empty queue does NOT invalidate the
-`head` reader, a pop does.
+graph. `ThreadSafeQueueCell` and `AsyncQueueCell` carry the same Core surface;
+the topic and work-queue families likewise ship `ThreadSafe*` and `Async*`
+shells. Nothing in the async family is async-coloured: storage reads, cursor
+advances, and lease decisions return plain values.
+
+The reactive shell wraps a pluggable `QueueStorage` backend (default
+`VecDequeStorage`) and owns demand-driven reader-kind handles. It invalidates
+exactly the handles whose values changed — a push to a non-empty queue does NOT
+invalidate the `head` reader, while a pop does. Thread-safe shells serialize
+their whole public operation through a `ThreadSafeContext`; the same canonical
+fixture corpus and invalidation matrices replay against all three flavors.
 
 ```python
 from lazily import QueueCell, QueuePopError, batch
@@ -366,11 +371,9 @@ assert delivery is not None
 assert work.ack("worker-a", delivery.delivery_id)
 ```
 
-The reader-kind independence law (a push to a non-empty queue does not change
-`head`, so the `head` reader is not invalidated) comes for free from the Cell
-`!=` (PartialEq) guard: after each op the shell re-derives each reader-kind cell
-from storage and writes it back, and a cell whose value did not change is not
-invalidated.
+The reader-kind independence law is explicit: every successful operation
+derives its changed-reader set from the before/after state and resets those
+memoized handles in one batch. Unchanged reader kinds remain warm.
 
 ## IPC — the `lazily-spec` wire protocol
 

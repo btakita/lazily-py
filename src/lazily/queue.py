@@ -653,7 +653,12 @@ class TopicCell[T]:
         self._subscriptions[subscriber_id] = _TopicSubscription(
             self.tail_offset, durability, True
         )
+        # A caller may have minted the subscriber reader before subscribing
+        # (the canonical fixture runner does this to observe the transition
+        # from "absent" to "connected at tail").  Reuse that stable handle and
+        # invalidate it now that its value-bearing state exists.
         self._ensure_reader(subscriber_id)
+        self._reset_readers([subscriber_id])
         return TopicSubscribeOutcome.Subscribed
 
     def reconnect(self, subscriber_id: str) -> None:
@@ -697,19 +702,31 @@ class TopicCell[T]:
         stream = self.read_stream(subscriber_id)
         return stream[0] if stream else None
 
-    def advance(self, subscriber_id: str, count: int = 1) -> int:
+    def advance(self, subscriber_id: str, count: int = 1) -> T | None:
+        """Consume up to ``count`` retained values and return the first one.
+
+        The Core operation consumes one value (the default) and returns that
+        value, or ``None`` when the subscriber is disconnected or already at
+        the tail.  ``count`` is the pre-Core Python extension retained for
+        compatibility; callers that advance more than once still receive the
+        first consumed value.
+        """
         if count < 0:
             raise ValueError("advance count must be non-negative")
+        if count == 0:
+            return None
         subscription = self._subscriptions[subscriber_id]
         if not subscription.connected or subscription.cursor == self.tail_offset:
-            return subscription.cursor
+            return None
+        start = subscription.cursor - self._base_offset
+        value = list(self._elements)[start]
         new_cursor = subscription.cursor + count
         if new_cursor > self.tail_offset:
             raise ValueError("cannot advance beyond the topic tail")
         if new_cursor != subscription.cursor:
             subscription.cursor = new_cursor
             self._reset_readers([subscriber_id])
-        return new_cursor
+        return value
 
     def gc(self) -> int:
         durable_cursors = [
