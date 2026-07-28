@@ -32,17 +32,17 @@ T = TypeVar("T")
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
-class Cell[T]:
+class Source[T]:
     """A **source cell**: a mutable value, written from outside, that other
-    reactives depend on. The v2 Cell-kernel handle name (``#lzcellkernel``) is
-    :data:`Source` — the value comes from *outside* (``set`` / ``merge``), the
-    writable value kind. ``Cell`` is the value-node concept and stays the native
-    class name (for mypyc native-struct reads and ``isinstance`` stability across
-    the family); :data:`Source` is the concrete handle bound to it. A
+    reactives depend on. ``Source`` is the v2 Cell-kernel handle name
+    (``#lzcellkernel``): its value comes from *outside* (``set`` / ``merge``),
+    making it the writable value kind. It is the native mypyc class, so runtime
+    identity, tracebacks, and introspection use the canonical name directly.
+    :data:`Cell` remains an identity-preserving migration alias. A
     :class:`~lazily.merge.MergeCell` is a ``Source`` whose write folds under a
     non-``KeepLatest`` policy (``Cell ≡ Source(KeepLatest)``).
 
-    **No reactive in this library exposes an observer API** — not Cell, not
+    **No reactive in this library exposes an observer API** — not Source, not
     :class:`~lazily.signal.Computed`. Observation in this graph is a declared
     dependency edge, not a registered callback: read the cell from a
     :class:`~lazily.signal.Computed` or :class:`~lazily.effect.Effect` and that
@@ -188,7 +188,7 @@ def _apply(fn: Any, ctx: Any) -> Any:
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
-class CellSlot[C_in, C_ctx: dict, T](BaseSlot[C_in, C_ctx, Cell[T]]):
+class SourceSlot[C_in, C_ctx: dict, T](BaseSlot[C_in, C_ctx, Source[T]]):
     __slots__ = ()
 
     def __init__(
@@ -200,29 +200,23 @@ class CellSlot[C_in, C_ctx: dict, T](BaseSlot[C_in, C_ctx, Cell[T]]):
         # route the call through :func:`_apply` so the compiled call does not
         # coerce the view to ``dict`` (which mypyc would reject at runtime).
         super().__init__(
-            callable=lambda ctx: Cell(ctx, _apply(callable, ctx)),
+            callable=lambda ctx: Source(ctx, _apply(callable, ctx)),
             resolve_ctx=resolve_ctx,
         )
 
 
 # -- Cell kernel vocabulary (#lzcellkernel) ---------------------------------- #
-# v2: ``Source`` is the concrete handle name for the writable value kind. The
-# native class keeps the name ``Cell`` (so mypyc native-struct reads and the
-# ``isinstance(node, Cell)`` checks across the family are untouched) and ``Source``
-# is a name alias bound to it — the reconciliation of "``Cell`` is the value-node
-# concept, the bare kind name is the handle" for a language whose mypyc native
-# class must keep its identity. Python has no compile-time read/write split
-# (design §4): the split is expressed by which methods a kind *has* — a
-# ``Source`` has ``set`` / ``merge``; a :class:`~lazily.signal.Computed` does not
-# — and is a convention, not a runtime gate (§4 rejected downgrading the
-# guarantee to a panic; Python simply has neither).
-Source = Cell
-SourceSlot = CellSlot
+# v2: ``Source`` / ``SourceSlot`` are the native mypyc classes. Keep the old
+# Python spellings as identity aliases so values created through either import
+# remain usable across the migration; the intentionally breaking surface is the
+# native class name/qualified identity, which is now canonical.
+Cell = Source
+CellSlot = SourceSlot
 
 
 def source[C_ctx: dict, T](
     callable: Callable[[C_ctx], T] = _none_as_t,
-) -> CellSlot[C_ctx, C_ctx, T]:
+) -> SourceSlot[C_ctx, C_ctx, T]:
     """Create a slot that returns a :data:`Source` cell (default ``KeepLatest``).
 
     The canonical Cell-kernel source-cell constructor; for a non-``KeepLatest``
@@ -231,25 +225,28 @@ def source[C_ctx: dict, T](
 
     Note: this is intentionally a function (not a class) so type checkers
     correctly treat ``@source`` as transforming the function type from ``T`` to
-    ``Cell[T]``.
+    ``Source[T]``.
     """
-    return CellSlot(callable=callable)
+    return SourceSlot(callable=callable)
 
 
 def source_def[C_in, C_ctx: dict, T](
     resolve_ctx: Callable[[C_in], C_ctx],
-) -> Callable[[Callable[[C_ctx], T]], CellSlot[C_in, C_ctx, T]]:
+) -> Callable[[Callable[[C_ctx], T]], SourceSlot[C_in, C_ctx, T]]:
     """Decorator factory: a context-cached :data:`Source` cell, custom resolver."""
 
-    def outer(callable: Callable[[C_ctx], T]) -> CellSlot[C_in, C_ctx, T]:
-        return CellSlot[C_in, C_ctx, T](callable=callable, resolve_ctx=resolve_ctx)
+    def outer(callable: Callable[[C_ctx], T]) -> SourceSlot[C_in, C_ctx, T]:
+        return SourceSlot[C_in, C_ctx, T](
+            callable=callable,
+            resolve_ctx=resolve_ctx,
+        )
 
     return outer
 
 
 def cell[C_ctx: dict, T](
     callable: Callable[[C_ctx], T] = _none_as_t,
-) -> CellSlot[C_ctx, C_ctx, T]:
+) -> SourceSlot[C_ctx, C_ctx, T]:
     """Deprecated v1 alias for :func:`source`.
 
     ``cell`` was the v1 name for the source-cell constructor; use :func:`source`.
@@ -259,4 +256,4 @@ def cell[C_ctx: dict, T](
         DeprecationWarning,
         stacklevel=2,
     )
-    return CellSlot(callable=callable)
+    return SourceSlot(callable=callable)

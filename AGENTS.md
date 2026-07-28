@@ -3,8 +3,8 @@
 Python port of the lazily **Cell kernel** (`#lzcellkernel`) — a `Source` cell
 (value from outside; `set` / `merge`) and a `Computed` cell (value from upstream,
 via a compute function), with `Effect` the value-less sink. `Cell` is the value
-node the `Source` handle is bound to (kept as the native class for mypyc +
-`isinstance` stability). Every cell is **guarded** — an equal recompute
+node concept; `Source` is its native writable handle and `Cell` is an
+identity-preserving migration alias. Every cell is **guarded** — an equal recompute
 suppresses the downstream cascade (matching TC39 `Signal.Computed`) — with **no
 unguarded derived mode**; `computed` *is* the guarded derived constructor. The
 eager construction is `computed(ctx, f).eager()` (`.eager()` / `.lazy()` /

@@ -1,3 +1,12 @@
+## Unreleased
+
+### Changed
+
+- **Breaking native-class rename:** `Source` and `SourceSlot` are now the
+  interpreted and mypyc-compiled class identities. `Cell` and `CellSlot` remain
+  identity-preserving migration aliases, but runtime names, tracebacks, and
+  qualified identities now use the canonical v2 vocabulary.
+
 ## 0.38.0
 
 ### Added

@@ -37,7 +37,7 @@ Lazily-computed cached value with automatic dependency tracking via a global `sl
 | `touch(ctx)` | Invalidate dependents |
 | `reset(ctx)` | Clear cache + invalidate dependents. Downstream edges are rebound to `None` before propagating, so a re-entered reset finds an empty set. |
 
-### Cell
+### Source
 
 Mutable value holder that notifies dependent slots when changed.
 
@@ -45,12 +45,14 @@ Mutable value holder that notifies dependent slots when changed.
 
 | Type | Purpose |
 |------|---------|
-| `Cell[T]` | Mutable value with subscription support |
-| `CellSlot[C_in, C_ctx, T]` | Slot that returns a Cell |
-| `cell[C_ctx, T]` | Convenience: CellSlot with identity resolver |
-| `cell_def(resolve_ctx)` | Decorator factory for custom context resolvers |
+| `Source[T]` | Native mutable value with subscription support |
+| `SourceSlot[C_in, C_ctx, T]` | Native slot that returns a Source |
+| `source[C_ctx, T]` | Convenience: SourceSlot with identity resolver |
+| `source_def(resolve_ctx)` | Decorator factory for custom context resolvers |
+| `Cell` / `CellSlot` | Identity-preserving migration aliases |
+| `cell` / `cell_def` | Deprecated constructor aliases |
 
-**Cell operations:**
+**Source operations:**
 
 | Property/Method | Purpose |
 |-----------------|---------|
@@ -60,7 +62,7 @@ Mutable value holder that notifies dependent slots when changed.
 | `cell.set(x)` | Alias for value setter |
 | `cell.touch()` | Invalidate dependents |
 
-**No reactive exposes an observer API** — neither `Cell` nor `Computed`.
+**No reactive exposes an observer API** — neither `Source` nor `Computed`.
 Observation is a declared dependency edge — read the cell from a `Computed` or
 `Effect` — not a registered callback. For a stream of every transition, use
 `Topic`.

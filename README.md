@@ -11,12 +11,13 @@ across processes and languages.
 
 `lazily` is the Python port of the **Cell kernel** (`#lzcellkernel`): two value
 kinds — `Source` and `Computed` — plus the value-less `Effect` sink. `Cell` is
-the value node the `Source` handle is bound to.
+the value-node concept; `Source` is its native writable handle.
 
 - **`Source`** — a value written from *outside* (`set` / `merge`); the writable
-  kind. Construct with `source` / `cell` (handle `Source`, native class `Cell`,
-  slot `SourceSlot`, native class `CellSlot`). A [`MergeCell`](#merge-algebra) is a `Source`
-  whose write folds under a non-`KeepLatest` policy (`Cell ≡ Source(KeepLatest)`).
+kind. Construct with `source` / `cell` (native class `Source`, slot
+`SourceSlot`; `Cell` / `CellSlot` remain identity-preserving migration aliases).
+A [`MergeCell`](#merge-algebra) is a `Source`
+whose write folds under a non-`KeepLatest` policy (`Cell ≡ Source(KeepLatest)`).
 - **`Computed`** — a value computed from *upstream*, via a compute function.
   Construct with `computed(ctx, f)`. **Guarded by default** and **lazy by
   default**.
@@ -222,7 +223,7 @@ dirty; it does **not** recompute until called again.
 
 ### Source cell
 
-A `Source` cell (native class `Cell`) holds a mutable value. Reading `cell.value`
+A `Source` cell holds a mutable value. Reading `cell.value`
 inside a `Computed` or `Effect` auto-subscribes that reader; assigning
 `cell.value = x` (or `cell.set(x)`) compares old and new via `!=` and, only if
 changed, cascades invalidation to dependents. Construct with `source` (the v1
@@ -230,8 +231,8 @@ changed, cascades invalidation to dependents. Construct with `source` (the v1
 
 | Type | Purpose |
 |------|---------|
-| `Cell[T]` / `Source[T]` | Mutable source value with subscription support |
-| `SourceSlot[C_in, C_ctx, T]` (native class `CellSlot`) | Slot that returns a `Source` cell |
+| `Source[T]` (`Cell[T]` migration alias) | Mutable source value with subscription support |
+| `SourceSlot[C_in, C_ctx, T]` (`CellSlot` migration alias) | Slot that returns a `Source` cell |
 | `source` | Decorator: `SourceSlot` with an identity resolver (canonical) |
 | `source_def(resolve_ctx)` | Decorator factory for a custom context resolver |
 | `cell` / `cell_def` | **Deprecated** v1 aliases of `source` / `source_def` |

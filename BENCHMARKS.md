@@ -13,8 +13,8 @@ Wall-clock benchmarks for the lazily-py hot paths. Two suites:
 
 All timings use `time.perf_counter()`. Lower is better.
 
-> **The reactive core is mypyc-compiled.** `Slot` / `Cell` / `Signal` / `Effect`
-> / `CellSlot` are compiled to native C extension classes (one compilation unit
+> **The reactive core is mypyc-compiled.** `Slot` / `Source` / `Computed` /
+> `Effect` / `SourceSlot` are compiled to native C extension classes (one compilation unit
 > for `slot` / `cell` / `signal` / `effect` / `batch`), giving the speedups
 > below. The public classes are decorated with
 > `@mypyc_attr(allow_interpreted_subclasses=True)`, so interpreted subclasses
@@ -93,7 +93,7 @@ run-to-run noise — they index the non-compiled paths.
   N=50/100 (the new `reconcile.lis_n50` / `reconcile.lis_n100` gates).
 - `cellmap.insert_50` measures whole-collection construction (50 inserts +
   allocation), not a single insert — divide by 50 for per-insert. Its speedup
-  comes for free from the compiled `Cell` it builds on.
+  comes for free from the compiled `Source` it builds on.
 
 ## Scale (≥1M cells) — spreadsheet-shaped graph
 
@@ -228,7 +228,7 @@ than benchmarked here.
 The reactive core (`slot` / `cell` / `signal` / `effect` / `batch`) is compiled
 to native C extension classes with **mypyc 2.3** (`mypy 2.3.0`), invoked through
 `setup.py`'s `mypycify(...)` as a single compilation unit so cross-file
-native-class inheritance (`BaseSlot` → `CellSlot`, `Slot` → `Effect` /
+native-class inheritance (`BaseSlot` → `SourceSlot`, `Slot` → `Effect` /
 `_SignalSlot`) gets mypyc's early binding. `make build` ships a platform wheel
 (`cp312-cp312-linux_x86_64.whl`, etc.) carrying the compiled `.so` alongside the
 `.py` sources.

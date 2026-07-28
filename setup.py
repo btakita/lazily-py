@@ -2,7 +2,7 @@
 
 mypyc-compiles the reactive core (``slot`` / ``cell`` / ``signal`` / ``effect``
 / ``batch``) as a single compilation unit so cross-file native-class inheritance
-(``BaseSlot`` → ``CellSlot``, ``Slot`` → ``Effect`` / ``_SignalSlot``) gets
+(``BaseSlot`` → ``SourceSlot``, ``Slot`` → ``Effect`` / ``_SignalSlot``) gets
 mypyc's early binding. The public classes are decorated with
 ``@mypyc_attr(allow_interpreted_subclasses=True)`` so interpreted subclasses
 (e.g. ``class HttpClient(Slot[...])``) keep working — this is the

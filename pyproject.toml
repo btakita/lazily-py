@@ -25,7 +25,7 @@ keywords = ["lazy", "evaluation", "dependency", "injection", "context", "lazily"
 requires-python = ">=3.12"
 dependencies = [
     # mypy_extensions.mypyc_attr decorates the public reactive classes
-    # (Slot/Cell/Signal/Effect) with ``allow_interpreted_subclasses=True``.
+    # (Slot/Source/Computed/Effect) with ``allow_interpreted_subclasses=True``.
     # mypyc processes it at compile time and bakes it into the C extension, so
     # compiled installs never import it at runtime; it is required by the
     # shipped pure-Python fallback (used when compilation is unavailable).

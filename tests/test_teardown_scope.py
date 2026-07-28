@@ -47,7 +47,7 @@ def test_disposal_api_is_live_on_whichever_module_is_loaded(module: str) -> None
     loaded = sys.modules[f"lazily.{module}"]
     origin = getattr(loaded, "__file__", "")
     assert origin, f"lazily.{module} has no __file__ to attribute behaviour to"
-    owner = {"cell": "Cell", "slot": "Slot", "effect": "Effect"}[module]
+    owner = {"cell": "Source", "slot": "Slot", "effect": "Effect"}[module]
     node = getattr(loaded, owner)
     for name in ("dispose", "disposed", "dependent_count", "dependency_count"):
         assert hasattr(node, name), (

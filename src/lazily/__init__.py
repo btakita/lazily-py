@@ -7,7 +7,7 @@ dependency injection patterns in Python applications. The core is the **Cell
 kernel** (``#lzcellkernel``): a ``Source`` cell (value from outside; ``set`` /
 ``merge``) and a ``Computed`` cell (value from upstream, via a compute function),
 with ``Effect`` the value-less sink outside the hierarchy. ``Cell`` is the value
-node the ``Source`` handle is bound to. Every cell is **guarded** (an equal
+node concept; ``Source`` is its native writable handle. Every cell is **guarded** (an equal
 recompute suppresses the cascade); there is no unguarded derived mode —
 ``computed`` *is* the guarded derived constructor. The eager construction is
 ``computed(ctx, f).eager()``.
