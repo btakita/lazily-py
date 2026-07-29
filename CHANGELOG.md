@@ -1,5 +1,13 @@
 ## Unreleased
 
+## 0.39.0
+
+### Added
+
+- Portable `Timer`, caller-driven `Timeout`, and `RevisionBarrier` primitives
+  now replay the canonical stdlib corpus and participate in the production
+  interop peer.
+
 ### Changed
 
 - **Breaking native-class rename:** `Source` and `SourceSlot` are now the
