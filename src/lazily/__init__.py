@@ -226,6 +226,8 @@ __all__ = [
     "ResyncRequest",
     "RetryPolicyCell",
     "RetryPolicyCore",
+    "RevisionBarrier",
+    "RevisionBarrierObservation",
     "RoomCore",
     "RoomError",
     "SampleCell",
@@ -295,10 +297,16 @@ __all__ = [
     "ThrottleCore",
     "ThrottleEdge",
     "TimelineSource",
+    "Timeout",
     "TimeoutCell",
     "TimeoutCore",
+    "TimeoutObservation",
+    "TimeoutOperation",
+    "Timer",
     "TimerCell",
     "TimerCore",
+    "TimerError",
+    "TimerObservation",
     "Transport",
     "TreeError",
     "TreeNode",
@@ -384,6 +392,7 @@ __all__ = [
     "spill_state",
     "spill_value",
     "stable_id",
+    "stdlib",
     "sum_fold",
     "teardown_scope",
     "temporal",
@@ -427,6 +436,7 @@ from . import (
     service,
     signaling,
     stable_id,
+    stdlib,
     temporal,
     textcrdt,
     thread_safe_reactive_family,
@@ -737,6 +747,16 @@ from .stable_id import (
 )
 from .state_machine import StateMachine
 from .statechart import ChartDef, StateChart
+from .stdlib import (
+    RevisionBarrier,
+    RevisionBarrierObservation,
+    Timeout,
+    TimeoutObservation,
+    TimeoutOperation,
+    Timer,
+    TimerError,
+    TimerObservation,
+)
 from .teardown import TeardownScope, dispose_node, teardown_scope
 from .temporal import (
     CronCell,

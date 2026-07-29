@@ -10,10 +10,21 @@ from __future__ import annotations
 
 import json
 import sys
+from dataclasses import asdict
 from typing import Any
 
 from .crdt_plane import CrdtPlaneRuntime
 from .ipc import CrdtOp, CrdtSync, IpcMessage
+from .stdlib import (
+    RevisionBarrier,
+    RevisionBarrierObservation,
+    Timeout,
+    TimeoutObservation,
+    TimeoutOperation,
+    Timer,
+    TimerError,
+    TimerObservation,
+)
 
 
 PROTOCOL_VERSION = 1
@@ -26,6 +37,7 @@ class InteropPeer:
         self._peer_id: int | None = None
         self._logical = 0
         self._runtime: CrdtPlaneRuntime | None = None
+        self._stdlib: dict[str, dict[str, Any]] = {}
 
     def handle(self, request: dict[str, Any]) -> dict[str, Any]:
         """Handle one control request and return one schema-shaped response."""
@@ -38,6 +50,12 @@ class InteropPeer:
             return self._deliver(request)
         if command == "snapshot":
             return self._snapshot()
+        if command == "feature_reset":
+            return self._feature_reset(request)
+        if command == "feature_step":
+            return self._feature_step(request)
+        if command == "feature_observe":
+            return self._feature_observe(request)
         if command == "bye":
             return {"ok": True}
         if isinstance(command, str) and command.startswith("link_"):
@@ -57,18 +75,190 @@ class InteropPeer:
         self._peer_id = peer_id
         self._logical = 0
         self._runtime = CrdtPlaneRuntime(peer_id)
+        self._stdlib = {}
         return {
             "ok": True,
             "binding": "lazily-py",
             "version": "0.37.1",
             "protocol_version": PROTOCOL_VERSION,
-            "features": ["distributed_crdt"],
+            "features": [
+                "distributed_crdt",
+                "stdlib_timer_v1",
+                "stdlib_timeout_v1",
+                "stdlib_revision_barrier_v1",
+            ],
             "codecs": ["json"],
             "channels": [],
             "channel_variants": {},
             "platform_profile": "portable",
             "carve_outs": ["msgpack", "transport_links"],
         }
+
+    @staticmethod
+    def _supported_feature(feature: object) -> bool:
+        return feature in {
+            "stdlib_timer_v1",
+            "stdlib_timeout_v1",
+            "stdlib_revision_barrier_v1",
+        }
+
+    def _feature_reset(self, request: dict[str, Any]) -> dict[str, Any]:
+        feature = request.get("feature")
+        if not self._supported_feature(feature):
+            return {
+                "ok": False,
+                "error": f"unsupported feature {feature}",
+                "unsupported": True,
+            }
+        assert isinstance(feature, str)
+        self._stdlib[feature] = {"last": None}
+        return {"ok": True, "feature": feature}
+
+    def _feature_step(self, request: dict[str, Any]) -> dict[str, Any]:
+        feature = request.get("feature")
+        state = self._stdlib.get(feature) if isinstance(feature, str) else None
+        step = request.get("step")
+        if state is None:
+            raise ValueError("feature_reset must run first")
+        if not isinstance(step, dict):
+            raise ValueError("feature_step requires object step")
+        if feature == "stdlib_timer_v1":
+            observation = self._timer_step(state, step)
+        elif feature == "stdlib_timeout_v1":
+            observation = self._timeout_step(state, step)
+        else:
+            observation = self._barrier_step(state, step)
+        state["last"] = observation
+        return {"ok": True, "feature": feature, "observation": observation}
+
+    def _feature_observe(self, request: dict[str, Any]) -> dict[str, Any]:
+        feature = request.get("feature")
+        state = self._stdlib.get(feature) if isinstance(feature, str) else None
+        if state is None or state["last"] is None:
+            raise ValueError("feature has no observation")
+        return {"ok": True, "feature": feature, "observation": state["last"]}
+
+    @staticmethod
+    def _clean(
+        value: TimerObservation | TimeoutObservation[Any] | RevisionBarrierObservation,
+    ) -> dict[str, Any]:
+        return {key: item for key, item in asdict(value).items() if item is not None}
+
+    @staticmethod
+    def _wire_u64(value: Any) -> Any:
+        if isinstance(value, str) and value.isascii() and value.isdecimal():
+            return int(value)
+        return value
+
+    def _timer_step(
+        self, state: dict[str, Any], step: dict[str, Any]
+    ) -> dict[str, Any]:
+        if step.get("op") == "start":
+            try:
+                timer = Timer(
+                    self._wire_u64(step["now"]),
+                    self._wire_u64(step["duration"]),
+                )
+            except TimerError as error:
+                state["timer"] = None
+                return {"outcome": "unavailable", "reason": error.reason}
+            state["timer"] = timer
+            return {"outcome": "pending", "deadline": timer.deadline}
+        timer = state.get("timer")
+        if not isinstance(timer, Timer):
+            raise ValueError("timer start must succeed before observe")
+        return self._clean(timer.observe(self._wire_u64(step["now"])))
+
+    def _timeout_step(
+        self, state: dict[str, Any], step: dict[str, Any]
+    ) -> dict[str, Any]:
+        if step.get("op") == "start":
+            try:
+                timeout: Timeout[str] = Timeout(
+                    self._wire_u64(step["now"]),
+                    self._wire_u64(step["duration"]),
+                )
+            except TimerError as error:
+                state["timeout"] = None
+                return {"outcome": "unavailable", "reason": error.reason}
+            state["timeout"] = timeout
+            return {"outcome": "pending", "deadline": timeout.deadline}
+        timeout = state.get("timeout")
+        if not isinstance(timeout, Timeout):
+            raise ValueError("timeout start must succeed before poll")
+        operation_calls = 0
+        cancellation_calls = 0
+
+        def operation() -> TimeoutOperation[str]:
+            nonlocal operation_calls
+            operation_calls += 1
+            if step["operation"] == "completed":
+                return TimeoutOperation.completed(step.get("value", ""))
+            if step["operation"] == "unavailable":
+                return TimeoutOperation.unavailable()
+            return TimeoutOperation.pending()
+
+        def cancellation() -> str:
+            nonlocal cancellation_calls
+            cancellation_calls += 1
+            return step["cancellation"]
+
+        result = self._clean(
+            timeout.poll(self._wire_u64(step["now"]), operation, cancellation)
+        )
+        result.update(
+            operation_calls=operation_calls,
+            cancellation_calls=cancellation_calls,
+        )
+        return result
+
+    def _barrier_step(
+        self, state: dict[str, Any], step: dict[str, Any]
+    ) -> dict[str, Any]:
+        operation = step.get("op")
+        cancellation_calls = 0
+        if operation == "start":
+            barrier = RevisionBarrier(
+                self._wire_u64(step["revision"]),
+                self._wire_u64(step["required_revision"]),
+                self._wire_u64(step.get("deadline")),
+            )
+            state["barrier"] = barrier
+            value = barrier.receipt("")
+        else:
+            barrier = state.get("barrier")
+            if not isinstance(barrier, RevisionBarrier):
+                raise ValueError("barrier start must run first")
+            if operation == "observe":
+
+                def cancellation() -> str:
+                    nonlocal cancellation_calls
+                    cancellation_calls += 1
+                    return step["cancellation"]
+
+                value = barrier.observe(
+                    self._wire_u64(step["now"]), step["predicate"], cancellation
+                )
+            elif operation == "register_recheck":
+                value = barrier.register_recheck(
+                    self._wire_u64(step["now"]),
+                    self._wire_u64(step["observed_revision"]),
+                    step["predicate"],
+                )
+            elif operation == "advance":
+                value = barrier.advance(
+                    self._wire_u64(step["revision"]), step["predicate"]
+                )
+            elif operation == "dispose":
+                value = barrier.dispose()
+            elif operation == "receipt":
+                value = barrier.receipt(step["key"])
+            else:
+                raise ValueError(f"unsupported barrier op {operation}")
+        result = self._clean(value)
+        if operation == "observe":
+            result["cancellation_calls"] = cancellation_calls
+        return result
 
     def _local_set(self, request: dict[str, Any]) -> dict[str, Any]:
         runtime, peer_id = self._ready()
@@ -150,6 +340,44 @@ def self_check() -> None:
         == 0
     )
     assert peer.handle({"cmd": "snapshot"})["cells"][0]["state"] == {"Inline": [65]}
+    for feature, steps in (
+        (
+            "stdlib_timer_v1",
+            [
+                {"op": "start", "now": 0, "duration": 1},
+                {"op": "observe", "now": 1},
+            ],
+        ),
+        (
+            "stdlib_timeout_v1",
+            [
+                {"op": "start", "now": 0, "duration": 1},
+                {
+                    "op": "poll",
+                    "now": 1,
+                    "operation": "pending",
+                    "cancellation": "pending",
+                },
+            ],
+        ),
+        (
+            "stdlib_revision_barrier_v1",
+            [
+                {
+                    "op": "start",
+                    "revision": 0,
+                    "required_revision": 1,
+                    "deadline": None,
+                },
+                {"op": "advance", "revision": 1, "predicate": True},
+            ],
+        ),
+    ):
+        assert peer.handle({"cmd": "feature_reset", "feature": feature})["ok"]
+        for step in steps:
+            assert peer.handle(
+                {"cmd": "feature_step", "feature": feature, "step": step}
+            )["ok"]
 
 
 def main() -> int:
