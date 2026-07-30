@@ -20,6 +20,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from conformance_assert import instrument
+
 from lazily import Slot
 from lazily.service import (
     DiscoveryCell,
@@ -34,7 +36,7 @@ _SPEC = Path(__file__).resolve().parents[2] / "lazily-spec" / "conformance" / "s
 
 
 def _load(rel: str) -> dict:
-    return json.loads((_SPEC / rel).read_text())
+    return instrument(json.loads((_SPEC / rel).read_text()), name=f"service/{rel}")
 
 
 def _spec_present() -> bool:

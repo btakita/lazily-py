@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from conformance_assert import instrument
+
 from lazily import CrdtTree, TextCrdt
 
 
@@ -22,7 +24,7 @@ _SPEC_FIXTURE = (
 
 def _fixture() -> dict:
     path = _SPEC_FIXTURE if _SPEC_FIXTURE.exists() else _LOCAL_FIXTURE
-    return json.loads(path.read_text())
+    return instrument(json.loads(path.read_text()), name="crdt-tree/algebra.json")
 
 
 def _scenario(name: str) -> dict:
@@ -49,11 +51,12 @@ def test_merge_algebra_is_order_and_duplication_independent() -> None:
             merged.merge_from(replicas[name])
         results.append(merged)
 
+    expect = scenario["expect"]
     assert isinstance(results[0], CrdtTree)
-    assert len({result.text() for result in results}) == 1
+    assert (len({result.text() for result in results}) == 1) is expect["texts_equal"]
     assert (
         len({tuple(sorted(result.version_vector().items())) for result in results}) == 1
-    )
+    ) is expect["version_vectors_equal"]
     assert all(result.value() == result.text() for result in results)
 
 
@@ -62,19 +65,23 @@ def test_empty_frontier_snapshot_preserves_lineage() -> None:
     source = TextCrdt.seed(scenario["seed"]["peer"], scenario["seed"]["text"])
     restored = TextCrdt(scenario["restore_peer"])
 
+    expect = scenario["expect"]
     assert restored.apply_delta(source.delta_since({}))
-    assert restored.text() == source.text()
+    assert (restored.text() == source.text()) is expect["restored_text_equal"]
     source_ids = {(item.id.counter, item.id.peer) for item in source.elements()}
     restored_ids = {(item.id.counter, item.id.peer) for item in restored.elements()}
-    assert restored_ids == source_ids
+    # Lineage, not just text: a snapshot that re-minted op ids would round-trip
+    # the same characters and still break every later merge.
+    assert (restored_ids == source_ids) is expect["op_ids_equal"]
 
+    assert scenario["then_concurrent_edit"]
     source.insert(len(source), "a")
     restored.insert(len(restored), "b")
     source.merge_from(restored)
     restored.merge_from(source)
     assert source.text() == restored.text()
     ids = [(item.id.counter, item.id.peer) for item in source.elements()]
-    assert len(ids) == len(set(ids))
+    assert len(ids) - len(set(ids)) == expect["later_merge_duplicates"]
 
 
 def test_own_frontier_emits_empty_delta() -> None:

@@ -59,6 +59,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from conformance_assert import instrument
 
 import lazily
 
@@ -139,7 +140,7 @@ def _load(name: str) -> dict[str, Any]:
     # A missing fixture inside a corpus that DOES exist is drift, not an absent
     # sibling checkout, so it fails rather than skips.
     assert path.exists(), f"canonical ingress fixture missing: {name}"
-    return json.loads(path.read_text())
+    return instrument(json.loads(path.read_text()), name=f"ingress/{name}")
 
 
 def _policy_of(raw: dict[str, Any]) -> lazily.IngressPolicy:

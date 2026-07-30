@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 
 import pytest
+from conformance_assert import instrument
 
 from lazily import ChartDef, Slot, StateChart
 
@@ -36,7 +37,7 @@ FIXTURES = [
 def load_fixture(name: str) -> dict:
     path = _SPEC_FIXTURES / name
     assert path.exists(), f"statechart fixture {name} missing from lazily-spec"
-    fixture = json.loads(path.read_text())
+    fixture = instrument(json.loads(path.read_text()), name=f"statechart/{name}")
     assert fixture["kind"] == "StateChart"
     return fixture
 

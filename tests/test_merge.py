@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 
 import pytest
+from conformance_assert import instrument
 
 from lazily import (
     KeepLatest,
@@ -122,7 +123,10 @@ def test_merge_cell_is_distinct_type() -> None:
     reason="lazily-spec fixture not present as sibling",
 )
 def test_mergecell_algebra_fixture() -> None:
-    fixture = json.loads((_SPEC_COLLECTIONS / "mergecell_algebra.json").read_text())
+    fixture = instrument(
+        json.loads((_SPEC_COLLECTIONS / "mergecell_algebra.json").read_text()),
+        name="collections/mergecell_algebra.json",
+    )
     by_name = {"KeepLatest": KeepLatest, "Sum": Sum, "Max": Max}
     seen = 0
     for scenario in fixture["scenarios"]:

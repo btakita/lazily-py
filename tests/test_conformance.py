@@ -25,6 +25,7 @@ import json
 from pathlib import Path
 
 import pytest
+from conformance_assert import TrackedBlock, instrument
 
 from lazily.ipc import (
     BlobBackendKind,
@@ -50,15 +51,38 @@ _SPEC_FIXTURES = Path(__file__).resolve().parents[2] / "lazily-spec" / "conforma
 def load_fixture(name: str) -> dict:
     spec_path = _SPEC_FIXTURES / name
     path = spec_path if spec_path.exists() else _LOCAL_FIXTURES / name
-    fixture = json.loads(path.read_text())
+    fixture = instrument(json.loads(path.read_text()), name=name)
     assert fixture["protocol_version"] == 1, (
         f"fixture {name} uses unsupported protocol version"
     )
     return fixture
 
 
+def assertions(fixture: dict, name: str) -> TrackedBlock:
+    """The fixture's ``assertions`` block, tracked (#lzassertunknownkeys).
+
+    Every key here must be consumed by some test in this suite. A key the runner
+    does not recognise used to fall through silently — the fixture round-tripped,
+    the suite went green, and the field the fixture exists for went unchecked.
+    """
+    block = fixture["assertions"]
+    assert isinstance(block, TrackedBlock), f"{name}: assertions block not instrumented"
+    return block
+
+
 def parse_wire(fixture: dict) -> IpcMessage:
     return IpcMessage.from_wire(fixture["wire"])
+
+
+def variant_name(obj: object) -> str:
+    """``DeltaOp_SlotValue`` -> ``SlotValue``: the fixture's language-agnostic tag.
+
+    The canonical fixtures name wire variants the way the schema does. Python
+    spells the same variants as ``<Union>_<Variant>`` classes, so the runner can
+    compare the fixture's string against the real parsed object rather than
+    against a hand-written constant.
+    """
+    return type(obj).__name__.split("_", 1)[-1]
 
 
 def assert_round_trip_json(message: IpcMessage, fixture: dict) -> None:
@@ -79,7 +103,7 @@ def assert_round_trip_json(message: IpcMessage, fixture: dict) -> None:
 def test_conformance_snapshot_minimal() -> None:
     fixture = load_fixture("snapshot_minimal.json")
     assert fixture["kind"] == "Snapshot"
-    a = fixture["assertions"]
+    a = assertions(fixture, "snapshot_minimal.json")
 
     message = parse_wire(fixture)
     assert message.is_snapshot
@@ -98,18 +122,22 @@ def test_conformance_snapshot_minimal() -> None:
 def test_conformance_snapshot_multi_node() -> None:
     fixture = load_fixture("snapshot_multi_node.json")
     assert fixture["kind"] == "Snapshot"
-    a = fixture["assertions"]
+    a = assertions(fixture, "snapshot_multi_node.json")
 
     message = parse_wire(fixture)
     snap = message.snapshot
-    assert snap.epoch == 7
-    assert len(snap.nodes) == 3
-    assert len(snap.edges) == 2
-    assert len(snap.roots) == 2
+    assert snap.epoch == a["epoch"]
+    assert len(snap.nodes) == a["node_count"]
+    assert len(snap.edges) == a["edge_count"]
+    assert len(snap.roots) == a["root_count"]
 
     opaque_id = a["opaque_node_id"]
     opaque_node = next(n for n in snap.nodes if n.node == opaque_id)
     assert isinstance(opaque_node.state, NodeState_Opaque)
+    assert (
+        any(isinstance(n.state, NodeState_Opaque) for n in snap.nodes)
+        is a["has_opaque_node"]
+    )
 
     assert_round_trip_json(message, fixture)
 
@@ -117,17 +145,21 @@ def test_conformance_snapshot_multi_node() -> None:
 def test_conformance_snapshot_shared_blob() -> None:
     fixture = load_fixture("snapshot_shared_blob.json")
     assert fixture["kind"] == "Snapshot"
+    a = assertions(fixture, "snapshot_shared_blob.json")
 
     message = parse_wire(fixture)
     snap = message.snapshot
-    assert snap.epoch == 9
-    assert len(snap.nodes) == 1
+    assert snap.epoch == a["epoch"]
+    assert len(snap.nodes) == a["node_count"]
+    assert len(snap.edges) == a["edge_count"]
+    assert len(snap.roots) == a["root_count"]
 
     state = snap.nodes[0].state
     assert isinstance(state, NodeState_SharedBlob)
-    assert state.blob.offset == 0
-    assert state.blob.len == 16
-    assert state.blob.epoch == 9
+    assert variant_name(state) == a["first_node_state_kind"]
+    assert state.blob.offset == a["blob_offset"]
+    assert state.blob.len == a["blob_len"]
+    assert state.blob.epoch == a["blob_epoch"]
 
     assert_round_trip_json(message, fixture)
 
@@ -140,7 +172,7 @@ def test_conformance_snapshot_shared_blob() -> None:
 def test_conformance_delta_sequential() -> None:
     fixture = load_fixture("delta_sequential.json")
     assert fixture["kind"] == "Delta"
-    a = fixture["assertions"]
+    a = assertions(fixture, "delta_sequential.json")
 
     message = parse_wire(fixture)
     assert message.is_delta
@@ -148,13 +180,13 @@ def test_conformance_delta_sequential() -> None:
 
     assert delta.base_epoch == a["base_epoch"]
     assert delta.epoch == a["epoch"]
-    assert delta.is_next_after(a["base_epoch"])
+    assert delta.is_next_after(a["base_epoch"]) is a["is_sequential"]
     assert not delta.is_next_after(a["base_epoch"] - 1)
 
     assert len(delta.ops) == a["op_count"]
 
     seen = {type(op).__name__ for op in delta.ops}
-    assert seen == {
+    all_variants = {
         "DeltaOp_CellSet",
         "DeltaOp_SlotValue",
         "DeltaOp_Invalidate",
@@ -163,6 +195,7 @@ def test_conformance_delta_sequential() -> None:
         "DeltaOp_EdgeAdd",
         "DeltaOp_EdgeRemove",
     }
+    assert (seen == all_variants) is a["has_all_op_variants"]
     assert len(seen) == 7
 
     assert_round_trip_json(message, fixture)
@@ -171,19 +204,22 @@ def test_conformance_delta_sequential() -> None:
 def test_conformance_delta_non_sequential() -> None:
     fixture = load_fixture("delta_non_sequential.json")
     assert fixture["kind"] == "Delta"
+    a = assertions(fixture, "delta_non_sequential.json")
 
     message = parse_wire(fixture)
     delta = message.delta
-    assert delta.base_epoch == 12
-    assert delta.epoch == 13
-    assert delta.is_next_after(12)
+    assert delta.base_epoch == a["base_epoch"]
+    assert delta.epoch == a["epoch"]
+    # `is_sequential` is a property of the frame (epoch == base_epoch + 1), not
+    # of any particular receiver; the gap below is what makes it need a resync.
+    assert delta.is_next_after(a["base_epoch"]) is a["is_sequential"]
     assert not delta.is_next_after(10)
 
     status = delta.apply_status(10)
-    assert status.is_resync_required
+    assert status.is_resync_required is a["resync_after_epoch_10"]
     assert status.last_epoch == 10
-    assert status.base_epoch == 12
-    assert status.epoch == 13
+    assert status.base_epoch == a["base_epoch"]
+    assert status.epoch == a["epoch"]
 
     assert_round_trip_json(message, fixture)
 
@@ -191,16 +227,19 @@ def test_conformance_delta_non_sequential() -> None:
 def test_conformance_delta_shared_blob() -> None:
     fixture = load_fixture("delta_shared_blob.json")
     assert fixture["kind"] == "Delta"
+    a = assertions(fixture, "delta_shared_blob.json")
 
     message = parse_wire(fixture)
     delta = message.delta
-    assert delta.base_epoch == 8
-    assert delta.epoch == 9
-    assert len(delta.ops) == 1
+    assert delta.base_epoch == a["base_epoch"]
+    assert delta.epoch == a["epoch"]
+    assert len(delta.ops) == a["op_count"]
 
     op = delta.ops[0]
     assert isinstance(op, DeltaOp_SlotValue)
+    assert variant_name(op) == a["first_op_kind"]
     assert isinstance(op.payload, IpcValue_SharedBlob)
+    assert variant_name(op.payload) == a["first_op_payload_kind"]
     assert op.payload.blob.offset == 40
     assert op.payload.blob.len == 17
     assert op.payload.blob.epoch == 9
@@ -215,7 +254,7 @@ def test_conformance_delta_zero_copy_arrow() -> None:
     # optional `backend` discriminator selecting a pluggable backend.
     fixture = load_fixture("delta_zero_copy_arrow.json")
     assert fixture["kind"] == "Delta"
-    a = fixture["assertions"]
+    a = assertions(fixture, "delta_zero_copy_arrow.json")
 
     message = parse_wire(fixture)
     delta = message.delta
@@ -225,7 +264,9 @@ def test_conformance_delta_zero_copy_arrow() -> None:
 
     op = delta.ops[0]
     assert isinstance(op, DeltaOp_SlotValue)
+    assert variant_name(op) == a["first_op_kind"]
     assert isinstance(op.payload, IpcValue_SharedBlob)
+    assert variant_name(op.payload) == a["first_op_payload_kind"]
     assert op.payload.blob.backend is BlobBackendKind.ARROW
     assert op.payload.blob.backend.value == a["first_op_payload_backend"]
 
@@ -241,13 +282,19 @@ def test_conformance_delta_zero_copy_arrow() -> None:
 def test_conformance_arena_blob() -> None:
     fixture = load_fixture("arena_blob.json")
     assert fixture["kind"] == "Arena"
-    a = fixture["assertions"]
+    a = assertions(fixture, "arena_blob.json")
 
-    arena = ShmBlobArena.with_capacity(fixture["input"]["capacity"])
+    assert fixture["input"]["capacity"] == a["capacity"]
+    assert fixture["input"]["epoch"] == a["epoch"]
+    arena = ShmBlobArena.with_capacity(a["capacity"])
     payload = bytes(fixture["input"]["payload"])
-    desc = arena.write_blob(fixture["input"]["epoch"], payload)
+    assert len(payload) == a["payload_len"]
+    desc = arena.write_blob(a["epoch"], payload)
 
     expected_desc = fixture["expected"]["descriptor"]
+    # The `assertions` copy of the descriptor is the language-agnostic one; the
+    # two must agree or the fixture contradicts itself.
+    assert a["descriptor"] == expected_desc
     assert desc.offset == expected_desc["offset"]
     assert desc.len == expected_desc["len"]
     assert desc.generation == expected_desc["generation"]
@@ -257,6 +304,11 @@ def test_conformance_arena_blob() -> None:
     # 40-byte LZSH header byte-identical across rs / py / zig
     buf = arena.buffer()
     header_len = a["header_len"]
+    # `magic` is the u32 0x4C5A5348 spelled as its ASCII reading; the header
+    # stores it little-endian, so the bytes on the wire are reversed.
+    assert int.from_bytes(bytes(buf[0:4]), "little") == int.from_bytes(
+        a["magic"].encode("ascii"), "big"
+    )
     assert bytes(buf[0:header_len]) == bytes(fixture["expected"]["header_bytes"])
     assert bytes(buf[header_len : header_len + len(payload)]) == bytes(
         fixture["expected"]["payload_region"]
@@ -299,7 +351,7 @@ def test_conformance_causal_receipts() -> None:
     fixture = load_fixture("receipts/causal_receipts.json")
     assert fixture["kind"] == "Receipt"
     assert fixture["model"] == "CausalReceipt"
-    a = fixture["assertions"]
+    a = assertions(fixture, "receipts/causal_receipts.json")
 
     frame = CausalReceipts.from_wire(fixture["wire"])
     assert len(frame.receipts) == a["receipt_count"]
@@ -321,12 +373,16 @@ def test_conformance_causal_receipts() -> None:
     projection = ReceiptProjection.from_receipts(causation, frame.receipts)
     assert projection.current_generation == a["current_generation"]
     assert projection.terminal_outcome is ReceiptOutcome.APPLIED
+    assert projection.terminal_outcome.value == a["terminal_outcome"]
     assert projection.is_terminal
     assert not projection.in_conflict
     assert projection.stale_receipt_ids() == a["stale_receipt_ids"]
     assert projection.nonterminal_outcomes() == [
         ReceiptOutcome.OBSERVED,
         ReceiptOutcome.ACCEPTED,
+    ]
+    assert [o.value for o in projection.nonterminal_outcomes()] == a[
+        "nonterminal_outcomes"
     ]
 
     # The fixture orders receipts observed -> accepted -> applied -> stale.

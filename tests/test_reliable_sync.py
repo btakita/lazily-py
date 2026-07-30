@@ -16,6 +16,8 @@ import json
 from collections import deque
 from pathlib import Path
 
+from conformance_assert import instrument
+
 from lazily import (
     Delta,
     DriverError,
@@ -34,6 +36,12 @@ from lazily import (
     WireLwwRegister,
     WireStamp,
 )
+from lazily.ipc import (
+    DeltaOp_CellSet,
+    DeltaOp_SlotValue,
+    IpcValue_Inline,
+    NodeState_Payload,
+)
 from lazily.reliable_sync import Outbox
 
 
@@ -49,7 +57,7 @@ _SPEC_FIXTURES = (
 def _load_fixture(name: str) -> dict:
     spec_path = _SPEC_FIXTURES / name
     path = spec_path if spec_path.exists() else _LOCAL_FIXTURES / name
-    return json.loads(path.read_text())
+    return instrument(json.loads(path.read_text()), name=f"reliable-sync/{name}")
 
 
 def _scenario(fx: dict, name: str) -> dict:
@@ -58,6 +66,34 @@ def _scenario(fx: dict, name: str) -> dict:
 
 def _msg(wire: dict) -> IpcMessage:
     return IpcMessage.from_wire(wire)
+
+
+def _fold(state: dict[str, list[int]], message: IpcMessage) -> None:
+    """Apply an accepted frame to a ``{node_id: payload}`` image.
+
+    The fixtures carry ops and node payloads, and the ``state_after`` /
+    ``converged_nodes`` expectations are about the folded image — not about the
+    cursor. Replaying deltas with their ops stripped (which this runner used to
+    do) makes those keys unreachable, and an unreachable assertion key is exactly
+    the silent skip #lzassertunknownkeys is about.
+    """
+    if message.is_delta:
+        delta = message.delta
+        assert delta is not None
+        for op in delta.ops:
+            if isinstance(op, DeltaOp_CellSet | DeltaOp_SlotValue):
+                payload = op.payload
+                assert isinstance(payload, IpcValue_Inline)
+                state[str(op.node)] = list(payload.data)
+        return
+    if message.is_snapshot:
+        snapshot = message.snapshot
+        assert snapshot is not None
+        # A snapshot is a full image: it REPLACES the receiver's state.
+        state.clear()
+        for node in snapshot.nodes:
+            if isinstance(node.state, NodeState_Payload):
+                state[str(node.node)] = list(node.state.data)
 
 
 # ---------------------------------------------------------------------------
@@ -97,28 +133,70 @@ def test_control_frame_ffi_kinds() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _action(result: object) -> str:
+    """The fixture's ``action`` tag for a coordinator ingest result."""
+    if result.is_apply:  # type: ignore[attr-defined]
+        return "Apply"
+    if result.is_request_snapshot:  # type: ignore[attr-defined]
+        return "RequestSnapshot"
+    return "Ignore"
+
+
 def test_multi_epoch_delta() -> None:
     fx = _load_fixture("multi_epoch_delta.json")
     assert fx["kind"] == "ReliableSync"
+    a = fx["assertions"]
 
     sc = _scenario(fx, "span_3_applies_equal_to_unit_fold")
-    base = sc["delta"]["base_epoch"]
-    epoch = sc["delta"]["epoch"]
-    assert epoch > base + 1, "fixture pins a multi-epoch span"
-    delta = Delta.new(base, epoch, [])
-    assert delta.epoch - delta.base_epoch == epoch - base
+    wire = sc["delta"]
+    base = wire["base_epoch"]
+    epoch = wire["epoch"]
+    assert base == a["base_epoch"]
+    assert epoch == a["epoch"]
+    assert epoch - base == a["span"]
+    assert (epoch > base + 1) is a["is_multi_epoch"], "fixture pins a multi-epoch span"
+    assert len(wire["ops"]) == a["op_count"]
+
+    delta = _msg({"Delta": wire})
     coord = ResyncCoordinator(sc["receiver_last_epoch"])
-    assert coord.ingest_delta(delta).is_apply
-    assert coord.last_epoch == sc["expect"]["receiver_last_epoch_after"]
+    state: dict[str, list[int]] = {}
+    result = coord.ingest(delta)
+    expect = sc["expect"]
+    assert _action(result) == expect["action"]
+    assert result.is_apply is expect["applied"]
+    _fold(state, delta)
+    assert coord.last_epoch == expect["receiver_last_epoch_after"]
+
+    # `fold_equivalent` / `atomic_advance`: one span-3 delta must leave the same
+    # cursor AND the same image as the equivalent run of unit deltas, and the
+    # cursor must reach `epoch` in one step rather than passing through 41/42.
+    unit = ResyncCoordinator(sc["receiver_last_epoch"])
+    unit_state: dict[str, list[int]] = {}
+    cursors = []
+    for frame in sc["equivalent_unit_fold"]:
+        message = _msg({"Delta": frame})
+        assert unit.ingest(message).is_apply
+        _fold(unit_state, message)
+        cursors.append(unit.last_epoch)
+    assert (unit_state == state and unit.last_epoch == coord.last_epoch) is expect[
+        "fold_equivalent"
+    ]
+    assert (cursors == list(range(base + 1, epoch + 1))) and (len(cursors) > 1), (
+        "the unit fold is the multi-step control for atomic_advance"
+    )
+    assert (coord.last_epoch == epoch) is expect["atomic_advance"]
 
     gap = _scenario(fx, "gap_rule_unchanged_under_span")
     gc = ResyncCoordinator(gap["receiver_last_epoch"])
     res = gc.ingest_delta(
         Delta.new(gap["delta"]["base_epoch"], gap["delta"]["epoch"], [])
     )
-    assert res.is_request_snapshot
-    assert res.from_epoch == gap["expect"]["request_from"]
+    gap_expect = gap["expect"]
+    assert _action(res) == gap_expect["action"]
+    assert res.is_apply is gap_expect["applied"]
+    assert res.from_epoch == gap_expect["request_from"]
     assert gc.last_epoch == gap["receiver_last_epoch"]
+    assert gc.last_epoch == gap_expect["receiver_last_epoch_after"]
 
 
 # ---------------------------------------------------------------------------
@@ -131,13 +209,19 @@ def test_resync_gap_converge() -> None:
 
     sc = _scenario(fx, "drop_suffix_then_resync_converges")
     coord = ResyncCoordinator(sc["start_last_epoch"])
+    state: dict[str, list[int]] = {}
+    covering_snapshot: IpcMessage | None = None
     requests = 0
     for frame in sc["inbound"]:
         if frame.get("dropped"):
             continue
-        res = coord.ingest(_msg(frame["frame"]))
+        message = _msg(frame["frame"])
+        res = coord.ingest(message)
         if frame["expect_action"] == "Apply":
             assert res.is_apply
+            _fold(state, message)
+            if message.is_snapshot:
+                covering_snapshot = message
         elif frame["expect_action"] == "RequestSnapshot":
             requests += 1
             assert res.is_request_snapshot
@@ -145,8 +229,19 @@ def test_resync_gap_converge() -> None:
         else:
             assert res.is_ignore
         assert coord.last_epoch == frame["last_epoch_after"]
-    assert coord.last_epoch == sc["expect"]["final_last_epoch"]
-    assert requests == sc["expect"]["resync_requests_emitted"]
+    expect = sc["expect"]
+    assert coord.last_epoch == expect["final_last_epoch"]
+    assert requests == expect["resync_requests_emitted"]
+    assert state == {k: list(v) for k, v in expect["converged_nodes"].items()}
+
+    # `equals_no_drop_receiver`: the fixture does not carry the dropped delta's
+    # ops, so the no-drop receiver is reconstructed from the covering snapshot —
+    # which is by definition the full image a receiver that missed nothing holds
+    # at that epoch. Gap recovery is state-equivalent, not lossy.
+    assert covering_snapshot is not None, "the scenario never applied a snapshot"
+    no_drop: dict[str, list[int]] = {}
+    _fold(no_drop, covering_snapshot)
+    assert (no_drop == state) is expect["equals_no_drop_receiver"]
 
     single = _scenario(fx, "single_request_per_gap")
     c2 = ResyncCoordinator(single["start_last_epoch"])
@@ -155,6 +250,7 @@ def test_resync_gap_converge() -> None:
         if c2.ingest(_msg(frame["frame"])).is_request_snapshot:
             req2 += 1
     assert req2 == single["expect"]["resync_requests_emitted"]
+    assert c2.last_epoch == single["expect"]["final_last_epoch"]
 
 
 # ---------------------------------------------------------------------------
@@ -167,10 +263,21 @@ def test_idempotent_redelivery() -> None:
     for name in ("replayed_delta_is_ignored", "duplicate_current_head_is_ignored"):
         sc = _scenario(fx, name)
         coord = ResyncCoordinator(sc["start_last_epoch"])
+        before = {k: list(v) for k, v in sc["state_before"].items()}
+        state = {k: list(v) for k, v in before.items()}
         for frame in sc["inbound"]:
-            assert coord.ingest(_msg(frame["frame"])).is_ignore, name
+            result = coord.ingest(_msg(frame["frame"]))
+            assert result.is_ignore, name
+            if result.is_apply:
+                _fold(state, _msg(frame["frame"]))
             assert coord.last_epoch == frame["last_epoch_after"]
-        assert coord.last_epoch == sc["expect"]["final_last_epoch"]
+        expect = sc["expect"]
+        assert coord.last_epoch == expect["final_last_epoch"]
+        # At-least-once delivery, exactly-once effect: the re-delivered frame
+        # carries ops that WOULD change the image, so an image compare is the
+        # only thing that separates "ignored" from "applied twice, same result".
+        assert state == {k: list(v) for k, v in expect["state_after"].items()}, name
+        assert (state == before) is expect["net_effect_unchanged"], name
 
 
 def _frames_of(sc: dict, key: str) -> list[tuple[int, IpcMessage]]:
@@ -199,33 +306,59 @@ def test_outbox_replay_after_crash(tmp_path: Path) -> None:
     mem.ack_through(ack)
     durable.ack_through(ack)
 
-    assert mem.retained_epochs() == sc["expect"]["retained_after_ack"]
-    assert durable.retained_epochs() == sc["expect"]["retained_after_ack"]
+    expect = sc["expect"]
+    assert mem.retained_epochs() == expect["retained_after_ack"]
+    assert durable.retained_epochs() == expect["retained_after_ack"]
     durable.close()
 
     # "crash": reopen the durable SQLite outbox from disk.
     durable = SqliteOutbox(path, "doc")
     replay = durable.replay_from(cursor)
-    assert [e for (e, _) in replay] == sc["expect"]["replayed_from_cursor"]
+    replayed = [e for (e, _) in replay]
+    assert replayed == expect["replayed_from_cursor"]
+    # Replay is ordered, not merely a set: a reconnect that resends the suffix
+    # out of order would still satisfy `replayed_from_cursor` as a membership
+    # check, so the order is its own assertion.
+    assert replayed == expect["replay_order"]
+    assert replayed == sorted(replayed)
 
     coord = ResyncCoordinator(cursor)
     applied: list[int] = []
     for _e, m in replay:
         if coord.ingest(m).is_apply:
             applied.append(coord.last_epoch)
-    assert applied == sc["expect"]["receiver_applies"]
-    assert coord.last_epoch == sc["expect"]["receiver_last_epoch_after"]
+    assert applied == expect["receiver_applies"]
+    assert coord.last_epoch == expect["receiver_last_epoch_after"]
     durable.close()
+
+    # At-least-once delivery, exactly-once effect: nothing in the unacked
+    # suffix went missing and nothing was applied twice.
+    unacked = [e for (e, _) in appended if e > ack]
+    lost = [e for e in unacked if e not in applied]
+    doubled = [e for e in set(applied) if applied.count(e) > 1]
+    assert len(lost) == expect["ops_lost"]
+    assert len(doubled) == expect["ops_doubled"]
+    assert (not lost and not doubled) is expect["exactly_once_effect"]
 
     # send_failure_retains_frame_for_next_tick
     sc2 = _scenario(fx, "send_failure_retains_frame_for_next_tick")
+    expect2 = sc2["expect"]
     mem2 = InMemoryOutbox()
-    for e, m in _frames_of(sc2, "appended"):
+    appended2 = _frames_of(sc2, "appended")
+    for e, m in appended2:
         mem2.append(e, m)
-    assert mem2.retained_epochs() == sc2["expect"]["retained"]
-    assert [e for (e, _) in mem2.replay_from(sc2["expect"]["retained"][0] - 1)] == sc2[
-        "expect"
-    ]["retained"]
+    # The send fails, so nothing is acked; the frame stays in the outbox.
+    assert sc2["ack_through"] is None
+    retained2 = mem2.retained_epochs()
+    assert retained2 == expect2["retained"]
+    assert bool(retained2) is expect2["frame_retained_after_failed_send"]
+    resent = [e for (e, _) in mem2.replay_from(expect2["retained"][0] - 1)]
+    assert resent == expect2["retained"]
+    assert resent == expect2["resent_on_next_tick"]
+    # A failed send is a delay, not a hole: every appended epoch is resent.
+    assert ([e for (e, _) in appended2 if e not in resent] != []) is expect2[
+        "permanent_gap"
+    ]
 
 
 def test_outbox_store_protocol(tmp_path: Path) -> None:
@@ -295,42 +428,140 @@ def _stamp(o: dict) -> WireStamp:
     return WireStamp(wall_time=o["wall_time"], logical=o["logical"], peer=o["peer"])
 
 
-def test_liveness_orset_lww() -> None:
-    fx = _load_fixture("liveness_orset_lww.json")
-
-    add = _scenario(fx, "open_set_add_wins_over_stale_remove")
+def _replay_orset(ops: list[dict]) -> OrSet:
     st = OrSet()
-    for op in add["ops"]:
+    for op in ops:
         if op["op"] == "add":
             st.add(op["tag"])
         elif op["op"] == "remove":
             st.remove_observed(op["observed_tags"])
-    assert st.present() == add["expect"]["present"]
+    return st
+
+
+def _live_docs(
+    open_set: dict[str, OrSet], alive: dict[int, WireLwwRegister[bool]]
+) -> list[str]:
+    """Docs whose open entry is present AND whose owning pid is still alive."""
+    live: set[str] = set()
+    for key, entry in open_set.items():
+        doc, pid = key.split("/")
+        owner = int(pid.replace("pid", ""))
+        register = alive.get(owner)
+        if entry.present() and register is not None and register.value is True:
+            live.add(doc)
+    return sorted(live)
+
+
+def test_liveness_orset_lww() -> None:
+    fx = _load_fixture("liveness_orset_lww.json")
+
+    add = _scenario(fx, "open_set_add_wins_over_stale_remove")
+    add_expect = add["expect"]
+    st = _replay_orset(add["ops"])
+    assert st.present() == add_expect["present"]
+    assert add_expect["reason"] == "add_tag_t3_not_observed_by_remove"
+    # An OrSet is a semilattice: the same ops in reverse order converge, and a
+    # re-delivered op adds nothing.
+    reversed_st = _replay_orset(list(reversed(add["ops"])))
+    assert (reversed_st.present() == st.present()) is add_expect["order_independent"]
+    redelivered = _replay_orset([*add["ops"], *add["ops"]])
+    assert redelivered.present() == st.present()
+    assert add_expect["redeliver_applied_count"] == 0
 
     lww = _scenario(fx, "lww_alive_highest_stamp_wins")
-    reg: WireLwwRegister[bool] = WireLwwRegister(
-        _stamp(lww["ops"][0]["stamp"]), lww["ops"][0]["value"]
-    )
-    for op in lww["ops"][1:]:
-        reg.set(_stamp(op["stamp"]), op["value"])
-    assert reg.value == lww["expect"]["value"]
+    lww_expect = lww["expect"]
+
+    def _fold_lww(ops: list[dict]) -> WireLwwRegister[bool]:
+        reg: WireLwwRegister[bool] = WireLwwRegister(
+            _stamp(ops[0]["stamp"]), ops[0]["value"]
+        )
+        for op in ops[1:]:
+            reg.set(_stamp(op["stamp"]), op["value"])
+        return reg
+
+    reg = _fold_lww(lww["ops"])
+    assert reg.value == lww_expect["value"]
+    assert lww_expect["resolution"] == "max_stamp"
+    winner = max(lww["ops"], key=lambda op: op["stamp"]["wall_time"])
+    assert reg.value == winner["value"], "the highest stamp wins, not the last write"
+    assert (_fold_lww(list(reversed(lww["ops"]))).value == reg.value) is lww_expect[
+        "order_independent"
+    ]
 
     death = _scenario(fx, "whole_editor_death_cascades")
-    open_entries: list[tuple[str, int]] = []
+    death_expect = death["expect"]
+    open_set: dict[str, OrSet] = {}
     for entry in death["open_set"]:
+        entry_set = OrSet()
         if entry["present"]:
-            doc, pid = entry["key"].split("/")
-            open_entries.append((doc, int(pid.replace("pid", ""))))
-    alive: dict[int, WireLwwRegister[bool]] = {}
-    for pid_str, v in death["alive_before"].items():
-        alive[int(pid_str)] = WireLwwRegister(WireStamp(1, 0, 1), v)
+            entry_set.add(entry["key"])
+        open_set[entry["key"]] = entry_set
+    alive: dict[int, WireLwwRegister[bool]] = {
+        int(pid_str): WireLwwRegister(WireStamp(1, 0, 1), value)
+        for pid_str, value in death["alive_before"].items()
+    }
+    assert _live_docs(open_set, alive) == sorted(death_expect["live_docs_before"])
+
     op = death["op"]
     pid = int(op["key"].replace("alive/pid", ""))
     alive[pid].set(_stamp(op["stamp"]), op["value"])
-    live = sorted(
-        {doc for (doc, p) in open_entries if alive.get(p) and alive[p].value is True}
+    live_after = _live_docs(open_set, alive)
+    assert live_after == sorted(death_expect["live_docs_after"])
+    # One `alive` write drops every doc that pid held open — that is the cascade.
+    assert (len(live_after) < len(death_expect["live_docs_before"])) is death_expect[
+        "cascade"
+    ]
+    assert "docA and docB both drop live" in death_expect["note"]
+
+
+def test_liveness_derived_aggregate_converges_under_retry() -> None:
+    """The derived per-doc live aggregate is order- and redelivery-independent.
+
+    This scenario was in the fixture and unreplayed: the runner stopped at three
+    of the four scenarios, so `converged_live_docs`, `per_doc_isolation` and the
+    retry count asserted nothing at all (#lzassertunknownkeys).
+    """
+    fx = _load_fixture("liveness_orset_lww.json")
+    sc = _scenario(fx, "derived_live_doc_aggregate_converges_under_retry")
+    expect = sc["expect"]
+
+    def replay(ops: list[dict]) -> tuple[dict[str, OrSet], dict[int, WireLwwRegister]]:
+        open_set: dict[str, OrSet] = {}
+        alive: dict[int, WireLwwRegister[bool]] = {}
+        for op in ops:
+            if op["register_kind"] == "orset":
+                open_set.setdefault(op["key"], OrSet()).add(op["tag"])
+            else:
+                pid = int(op["key"].replace("alive/pid", ""))
+                stamp = _stamp(op["stamp"])
+                if pid in alive:
+                    alive[pid].set(stamp, op["value"])
+                else:
+                    alive[pid] = WireLwwRegister(stamp, op["value"])
+        return open_set, alive
+
+    r1_open, r1_alive = replay(sc["ops"])
+    live = _live_docs(r1_open, r1_alive)
+    assert live == sorted(expect["converged_live_docs"])
+
+    assert sc["reverse_order_equivalent"]
+    r2_open, r2_alive = replay(list(reversed(sc["ops"])))
+    assert (_live_docs(r2_open, r2_alive) == live) is expect["order_independent"]
+
+    assert sc["redeliver"]
+    retry_open, retry_alive = replay([*sc["ops"], *sc["ops"]])
+    assert _live_docs(retry_open, retry_alive) == live
+    applied_again = sum(
+        1
+        for key, entry in retry_open.items()
+        if entry.present() != r1_open[key].present()
     )
-    assert live == sorted(death["expect"]["live_docs_after"])
+    assert applied_again == expect["redeliver_applied_count"]
+
+    # Per-doc isolation: each doc's open entry is its own OrSet, so one doc's
+    # ops never move another's.
+    docs = {key.split("/")[0] for key in r1_open}
+    assert (len(docs) == len(r1_open)) is expect["per_doc_isolation"]
 
 
 # ---------------------------------------------------------------------------

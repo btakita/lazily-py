@@ -18,6 +18,7 @@ import json
 from pathlib import Path
 
 import pytest
+from conformance_assert import instrument
 
 from lazily.lossless_tree_crdt import (
     LEAF_KIND_FROM_WIRE,
@@ -43,7 +44,7 @@ _SPEC_FIXTURES = (
 def _fixture(name: str) -> dict:
     path = _SPEC_FIXTURES / name
     assert path.exists(), f"missing spec fixture {name}"
-    return json.loads(path.read_text())
+    return instrument(json.loads(path.read_text()), name=f"lossless-tree/{name}")
 
 
 def _seed(spec: dict) -> SeedElement | SeedLeaf:

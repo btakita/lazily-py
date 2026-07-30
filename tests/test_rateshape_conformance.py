@@ -20,6 +20,8 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from conformance_assert import instrument
+
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -42,7 +44,7 @@ _SPEC = (
 
 
 def _load(rel: str) -> dict:
-    return json.loads((_SPEC / rel).read_text())
+    return instrument(json.loads((_SPEC / rel).read_text()), name=f"rateshape/{rel}")
 
 
 def _spec_present() -> bool:

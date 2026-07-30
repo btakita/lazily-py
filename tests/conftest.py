@@ -16,7 +16,10 @@ Writes to ``LAZILY_CONFORMANCE_MANIFEST``; a no-op when unset, so a bare
 """
 
 import os
+import sys
 from pathlib import Path
+
+from conformance_assert import consumption_failures
 
 
 _MANIFEST = os.environ.get("LAZILY_CONFORMANCE_MANIFEST")
@@ -51,14 +54,48 @@ if _MANIFEST:
     Path.read_text = _read_text  # type: ignore[method-assign]
     Path.open = _open  # type: ignore[method-assign]
 
-    def pytest_sessionfinish(session: object, exitstatus: object) -> None:
-        """Append (not truncate) — pytest-xdist and reruns each contribute reads."""
-        if not _opened:
-            return
-        try:
-            with open(_MANIFEST, "a", encoding="utf-8") as handle:
-                handle.write("\n".join(sorted(_opened)) + "\n")
-        except OSError:
-            # A manifest we cannot write shows up downstream as missing evidence,
-            # which is correct. Never fail the suite over bookkeeping.
-            pass
+
+def _write_manifest() -> None:
+    """Append (not truncate) — pytest-xdist and reruns each contribute reads."""
+    if not _MANIFEST or not _opened:
+        return
+    try:
+        with open(_MANIFEST, "a", encoding="utf-8") as handle:
+            handle.write("\n".join(sorted(_opened)) + "\n")
+    except OSError:
+        # A manifest we cannot write shows up downstream as missing evidence,
+        # which is correct. Never fail the suite over bookkeeping.
+        pass
+
+
+def pytest_sessionfinish(session, exitstatus) -> None:  # type: ignore[no-untyped-def]
+    """Persist the read manifest, then fail on unconsumed assertion keys.
+
+    Consumption is a session-wide property (#lzassertunknownkeys): fixtures are
+    routinely loaded by more than one test — a dedicated assertion test plus a
+    parametrized round-trip sweep — and the question worth answering is whether
+    ANY runner checked the key, not whether each individual load did. So the
+    verdict lands here rather than in a per-test teardown.
+
+    The failure is expressed as a non-zero exit status, not just printed output.
+    A conformance guard whose only signal is a line in the log is the same
+    silent-skip failure one level up.
+    """
+    _write_manifest()
+
+    failures = consumption_failures()
+    if not failures:
+        return
+    report = [
+        "",
+        "UNCONSUMED CONFORMANCE ASSERTION KEYS (#lzassertunknownkeys)",
+        "  A fixture asserts something no runner in this suite ever checked.",
+        "  Replaying a fixture is not testing it; implement the check (or, for",
+        "  narration rather than an assertion, declare it via tracked(prose=...)).",
+        "",
+    ]
+    report += [f"  {line}" for line in failures]
+    report.append("")
+    sys.stderr.write("\n".join(report) + "\n")
+    if exitstatus == 0:
+        session.exitstatus = 1

@@ -21,6 +21,8 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from conformance_assert import instrument
+
 from lazily import Slot
 from lazily.temporal import CronCell, DeadlineCell, IntervalCell, TimerCell
 
@@ -33,7 +35,7 @@ _SPEC = Path(__file__).resolve().parents[2] / "lazily-spec" / "conformance" / "t
 
 
 def _load(rel: str) -> dict:
-    return json.loads((_SPEC / rel).read_text())
+    return instrument(json.loads((_SPEC / rel).read_text()), name=f"temporal/{rel}")
 
 
 def _spec_present() -> bool:

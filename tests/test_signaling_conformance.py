@@ -16,6 +16,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from conformance_assert import instrument
+
 from lazily.signaling import (
     PermissionMode,
     RoomCore,
@@ -31,7 +33,7 @@ def _load(rel: str) -> dict:
     path = _SPEC / rel
     if not path.exists():
         path = _LOCAL / rel
-    return json.loads(path.read_text())
+    return instrument(json.loads(path.read_text()), name=rel)
 
 
 def test_signaling_frames_round_trip() -> None:
@@ -39,8 +41,9 @@ def test_signaling_frames_round_trip() -> None:
     assert fix["kind"] == "SignalingFrames"
     for frame in fix["frames"]:
         wire = frame["wire"]
+        label = frame["label"]
         decoded = SignalingFrame.from_wire(wire, direction=frame["direction"])
-        assert decoded.to_wire() == wire, f"round-trip mismatch: {frame['label']}"
+        assert decoded.to_wire() == wire, f"round-trip mismatch: {label}"
         # Client-directed frames carry `to`; server-forwarded carry `from`.
         if frame["direction"] == "client":
             for variant in ("offer", "answer", "ice", "relay"):
@@ -55,15 +58,61 @@ def test_signaling_frames_round_trip() -> None:
         # to/from never both present.
         assert not (decoded.to is not None and decoded.frm is not None)
 
+        # Per-frame field assertions. Decoding a frame is not testing it: every
+        # key the fixture names has to reach a real attribute of the decoded
+        # frame (#lzassertunknownkeys).
+        a = frame["assertions"]
+        if "peer" in a:
+            assert decoded.peer == a["peer"], f"{label}: peer"
+        if "to" in a:
+            assert decoded.to == a["to"], f"{label}: to"
+        if "from" in a:
+            assert decoded.frm == a["from"], f"{label}: from"
+        if "code" in a:
+            assert decoded.code == a["code"], f"{label}: code"
+        if "peers" in a:
+            assert decoded.peers == a["peers"], f"{label}: peers"
+        if "capabilities" in a:
+            assert decoded.capabilities == a["capabilities"], f"{label}: capabilities"
+        if "has_capabilities" in a:
+            assert (decoded.capabilities is not None) is a["has_capabilities"], (
+                f"{label}: has_capabilities"
+            )
+        if "roster_excludes_self" in a:
+            assert (decoded.peer not in (decoded.peers or [])) is a[
+                "roster_excludes_self"
+            ], f"{label}: roster_excludes_self"
+        if "server_stamped_from" in a:
+            # A server-forwarded frame carries `from` and never `to`; the value
+            # is the sender's registered peer id, which the session fixture
+            # below proves end-to-end.
+            assert (
+                frame["direction"] == "server"
+                and decoded.frm is not None
+                and decoded.to is None
+            ) is a["server_stamped_from"], f"{label}: server_stamped_from"
+
 
 def test_signaling_anti_spoof_session() -> None:
     fix = _load("signaling/anti_spoof_session.json")
     assert fix["kind"] == "SignalingSession"
+    a = fix["assertions"]
     room = RoomCore(mode=PermissionMode(fix["mode"]))
+
+    # The three session-wide invariants the fixture names, each accumulated over
+    # the transcript and asserted against the fixture's own claim below.
+    registered: dict[str, int] = {}
+    rosters_exclude_self = True
+    rosters_sorted = True
+    forwarded_from_is_registered = True
+    saw_welcome = False
+    saw_forward = False
 
     for step in fix["steps"]:
         inp = step["input"]
         frame = SignalingFrame.from_wire(inp["recv"], direction="client")
+        if frame.type == "join":
+            registered[inp["conn"]] = frame.peer  # type: ignore[assignment]
         emits = room.handle(inp["conn"], frame)
         assert len(emits) == len(step["expect"]), (
             f"step {inp}: emit count {len(emits)} != {len(step['expect'])}"
@@ -77,6 +126,22 @@ def test_signaling_anti_spoof_session() -> None:
             # Anti-spoof: forwarded frames carry a server-stamped `from`,
             # never a client-supplied value; `to`/`from` never both present.
             assert not (emitted.to is not None and emitted.frm is not None)
+            if emitted.type == "welcome":
+                saw_welcome = True
+                roster = emitted.peers or []
+                rosters_exclude_self &= emitted.peer not in roster
+                rosters_sorted &= roster == sorted(roster)
+            if emitted.frm is not None:
+                saw_forward = True
+                # The stamped `from` is the SENDER's registered peer id — the
+                # sender being the conn that produced this step, not the target.
+                forwarded_from_is_registered &= emitted.frm == registered[inp["conn"]]
+
+    assert saw_welcome, "transcript proves nothing about rosters without a welcome"
+    assert saw_forward, "transcript proves nothing about anti-spoof without a forward"
+    assert rosters_exclude_self is a["roster_excludes_self"]
+    assert rosters_sorted is a["roster_sorted_ascending"]
+    assert forwarded_from_is_registered is a["forwarded_from_is_server_registered"]
 
     for reject in fix["rejects"]:
         try:

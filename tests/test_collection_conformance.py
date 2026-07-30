@@ -13,6 +13,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from conformance_assert import instrument
+
 from lazily import (
     CrdtOp,
     CrdtPlaneRuntime,
@@ -37,7 +39,7 @@ def _load(rel: str) -> dict:
     path = _SPEC / rel
     if not path.exists():
         path = _LOCAL / rel
-    return json.loads(path.read_text())
+    return instrument(json.loads(path.read_text()), name=rel)
 
 
 # ---------------------------------------------------------------------------
@@ -386,19 +388,40 @@ def test_crdt_plane_anti_entropy_conformance() -> None:
     fix = _load("distributed/anti_entropy_converge.json")
     assert fix["model"] == "CrdtPlane"
     for sc in fix["scenarios"]:
+        expect = sc["expect"]
         plane = CrdtPlaneRuntime()
         applied = plane.apply_ops([_mk_crdtop(o) for o in sc["ops"]])
-        assert applied == sc["expect"]["applied_count"], sc["name"]
+        assert applied == expect["applied_count"], sc["name"]
+
+        # `resolution`: the winner is the op with the greatest WireStamp, not
+        # the last one delivered. Asserting the converged state alone cannot
+        # tell those apart when they coincide, so pin the rule itself.
+        assert expect["resolution"] == "max_stamp", sc["name"]
+        by_node: dict[int, dict] = {}
+        for op in sc["ops"]:
+            stamp = op["stamp"]
+            key = (stamp["wall_time"], stamp["logical"], stamp["peer"])
+            best = by_node.get(op["node"])
+            if best is None or key > best["_key"]:
+                by_node[op["node"]] = {**op, "_key": key}
+        for entry in plane.converged():
+            winner = by_node[entry.node]
+            assert entry.state == bytes(winner["state"]["Inline"]), (
+                f"{sc['name']}: node {entry.node} did not resolve to the max stamp"
+            )
+
         if sc.get("redeliver"):
             rd = plane.apply_ops([_mk_crdtop(o) for o in sc["ops"]])
-            assert rd == sc["expect"]["redeliver_applied_count"], sc["name"]
+            assert rd == expect["redeliver_applied_count"], sc["name"]
         if sc.get("reverse_order_equivalent"):
             plane2 = CrdtPlaneRuntime()
             plane2.apply_ops([_mk_crdtop(o) for o in reversed(sc["ops"])])
             got = {(e.node, e.state) for e in plane.converged()}
             got2 = {(e.node, e.state) for e in plane2.converged()}
-            assert got == got2, f"{sc['name']}: reverse order not equivalent"
-        for want in sc["expect"]["converged"]:
+            assert (got == got2) is expect["order_independent"], (
+                f"{sc['name']}: reverse order not equivalent"
+            )
+        for want in expect["converged"]:
             matches = [
                 e
                 for e in plane.converged()

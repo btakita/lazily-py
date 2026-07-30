@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from conformance_assert import instrument
 
 from lazily.stdlib import (
     MAX_U64,
@@ -26,7 +27,7 @@ def clean(value: object) -> dict[str, Any]:
 
 
 def load(name: str) -> dict[str, Any]:
-    return json.loads((SPEC / name).read_text())
+    return instrument(json.loads((SPEC / name).read_text()), name=f"stdlib/{name}")
 
 
 def replay_timer(steps: list[dict[str, Any]]) -> None:

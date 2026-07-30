@@ -20,6 +20,7 @@ import json
 from pathlib import Path
 
 import pytest
+from conformance_assert import instrument
 
 from lazily.command import (
     CallStateKind,
@@ -43,7 +44,7 @@ _SPEC_FIXTURES = (
 def _fixture(name: str) -> dict:
     path = _SPEC_FIXTURES / name
     assert path.exists(), f"missing spec fixture {name}"
-    return json.loads(path.read_text())
+    return instrument(json.loads(path.read_text()), name=f"message-passing/{name}")
 
 
 class _Transport:
@@ -161,18 +162,23 @@ def test_terminal_conflict_fail_closed_detail() -> None:
     frames = fixture["frames"]
     expect = fixture["expect"]
     cmd = _first_command_id(frames)
+    assert cmd == expect["conflict_command_id"]
 
-    # Frame 0: submit. Frame 1: applied receipt -> terminal applied.
-    _ingest_frame(proj, frames[0])
-    _ingest_frame(proj, frames[1])
+    # The conflict lands on the frame the fixture names, and NOT before it: a
+    # reducer that flagged a conflict at frame 1 would still end up "in
+    # conflict" without failing closed at the right point.
+    conflict_at = expect["conflict_after_frame_index"]
+    for index, frame in enumerate(frames[:conflict_at]):
+        _ingest_frame(proj, frame)
+        assert not proj.has_conflict(cmd), f"conflict raised early at frame {index}"
     before = proj.to_image().to_wire()
     assert before == expect["projection_before_conflict"]
     assert proj.entry(cmd).status is CommandStatus.APPLIED
 
     # Frame 2: conflicting rejected receipt -> fail closed, applied preserved.
-    status = _ingest_frame(proj, frames[2])
+    status = _ingest_frame(proj, frames[conflict_at])
     assert status is CommandApplyStatus.TERMINAL_CONFLICT
-    assert proj.has_conflict(cmd)
+    assert proj.has_conflict(cmd) is expect["conflict"]
     assert proj.entry(cmd).status is CommandStatus.APPLIED  # unchanged
     assert proj.last_conflict is not None
     assert proj.last_conflict.command_id == cmd

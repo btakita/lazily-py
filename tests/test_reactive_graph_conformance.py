@@ -70,6 +70,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from conformance_assert import instrument
 
 from lazily import (
     Cell,
@@ -1090,11 +1091,20 @@ def _run_corpus(model_cls: Any) -> None:
     total_checks = 0
 
     for name in FIXTURES:
-        fixture = json.loads((_SPEC_PATH / name).read_text())
-        reason = _unsupported_reason(fixture, model_cls.SUPPORTED_OPS)
+        raw = json.loads((_SPEC_PATH / name).read_text())
+        reason = _unsupported_reason(raw, model_cls.SUPPORTED_OPS)
         if reason is not None:
             skipped[name] = reason
             continue
+
+        # Instrumented only once the pre-flight has accepted the fixture. This
+        # runner already fails CLOSED on an unrecognised expectation key —
+        # `_unsupported_reason` rejects the fixture and the skip lands in the
+        # asserted ledger above — so the unconsumed-key guard
+        # (#lzassertunknownkeys) covers the replay path, and the skip ledger
+        # covers the rest. Tracking a fixture the pre-flight rejected would just
+        # report the same gap twice under a weaker name.
+        fixture = instrument(raw, name=f"reactive-graph/{name}")
 
         reports = asyncio.run(_run_fixture(model_cls, name, fixture))
 

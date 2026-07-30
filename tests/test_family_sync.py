@@ -16,6 +16,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from conformance_assert import instrument
+
 from lazily import CrdtPlaneRuntime, CrdtSync
 
 
@@ -28,7 +30,7 @@ _SPEC_FIXTURES = (
 def _load_fixture(name: str) -> dict:
     spec_path = _SPEC_FIXTURES / name
     path = spec_path if spec_path.exists() else _LOCAL_FIXTURES / name
-    return json.loads(path.read_text())
+    return instrument(json.loads(path.read_text()), name=f"familysync/{name}")
 
 
 def _suffix_of(key: str) -> str:

@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from conformance_assert import instrument
 
 import lazily
 
@@ -39,7 +40,7 @@ def _load(name: str) -> dict:
         path = _LOCAL / "collections" / name
     if not path.exists():
         pytest.skip(f"canonical collections fixture not found: {name}")
-    return json.loads(path.read_text())
+    return instrument(json.loads(path.read_text()), name=f"collections/{name}")
 
 
 def _order_digest(keys: list[str]) -> int:

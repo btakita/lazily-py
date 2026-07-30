@@ -18,6 +18,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from conformance_assert import instrument
+
 from lazily import Slot
 from lazily.presence import AwarenessCell, EphemeralCell, PresenceCell
 
@@ -26,7 +28,7 @@ _SPEC = Path(__file__).resolve().parents[2] / "lazily-spec" / "conformance" / "p
 
 
 def _load(rel: str) -> dict:
-    return json.loads((_SPEC / rel).read_text())
+    return instrument(json.loads((_SPEC / rel).read_text()), name=f"presence/{rel}")
 
 
 def _spec_present() -> bool:

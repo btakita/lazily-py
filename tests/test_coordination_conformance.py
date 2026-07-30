@@ -19,6 +19,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from conformance_assert import instrument
+
 from lazily import Slot
 from lazily.coordination import (
     BarrierCell,
@@ -36,7 +38,7 @@ _SPEC = (
 
 
 def _load(rel: str) -> dict:
-    return json.loads((_SPEC / rel).read_text())
+    return instrument(json.loads((_SPEC / rel).read_text()), name=f"coordination/{rel}")
 
 
 def _spec_present() -> bool:

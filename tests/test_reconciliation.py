@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 
 import pytest
+from conformance_assert import instrument
 
 from lazily import Level, ReconcileOp, reconcile_ops
 from lazily.reconciliation import common_keys, idx_in, lis_by, moved_keys, stable_keys
@@ -116,7 +117,10 @@ def test_keyed_reconciliation_lis_fixture() -> None:
     fixture_path = _SPEC_FIXTURES / "keyed_reconciliation_lis.json"
     if not fixture_path.exists():
         pytest.skip("lazily-spec collection fixtures not co-located")
-    raw = json.loads(fixture_path.read_text())
+    raw = instrument(
+        json.loads(fixture_path.read_text()),
+        name="collections/keyed_reconciliation_lis.json",
+    )
     recon = raw["reconcile"]
     prior = Level(order=recon["prior"]["order"], values=recon["prior"]["values"])
     target = Level(order=recon["target"]["order"], values=recon["target"]["values"])
@@ -133,3 +137,24 @@ def test_keyed_reconciliation_lis_fixture() -> None:
     assert ("move", "b") not in op_keys and ("move", "c") not in op_keys
     assert ("update", "b") not in op_keys and ("update", "c") not in op_keys
     assert expected["stable_keys_not_invalidated"] == ["b", "c"]
+
+    # `ops` is the MINIMAL op set, so the emitted ops must match it exactly —
+    # spot-checking membership above would pass just as happily for a
+    # reconciler that also moved b and c (#lzassertunknownkeys).
+    emitted = [
+        {"type": op.kind, "key": op.key}
+        if op.after is None
+        else {"type": op.kind, "key": op.key, "after": op.after}
+        for op in ops
+    ]
+    assert emitted == expected["ops"]
+
+    # And applying that op set to the prior order yields the target order.
+    order = list(prior.order)
+    for op in ops:
+        if op.kind == "remove":
+            order.remove(op.key)
+        elif op.kind == "move":
+            order.remove(op.key)
+            order.insert(order.index(op.after) + 1 if op.after else 0, op.key)
+    assert order == expected["result_order"]
