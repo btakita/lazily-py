@@ -21,7 +21,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from conformance_assert import instrument
+from conformance_assert import assert_invalidates, assert_key, instrument
 
 from lazily import Slot
 from lazily.temporal import CronCell, DeadlineCell, IntervalCell, TimerCell
@@ -50,17 +50,21 @@ def _observer(ctx: dict, reader: Callable[[], Any]) -> Slot:  # type: ignore[typ
     return s
 
 
-def _assert_inval(ctx: dict, observer: Slot, expected_inv: bool, reader: str) -> None:  # type: ignore[type-arg]
+def _assert_inval(ctx: dict, observer: Slot, exp: dict, reader: str, step: int) -> None:  # type: ignore[type-arg]
     cached = observer.is_in(ctx)
-    if expected_inv:
-        assert not cached, (
-            f"reader `{reader}` should have been invalidated but stayed cached"
-        )
-    else:
-        assert cached, (
-            f"reader `{reader}` should have stayed cached but was invalidated"
-        )
+    assert_invalidates(exp, {reader: not cached}, where=f"step {step}")
     observer(ctx)  # re-materialize for the next step
+
+
+def _unit(value: Any) -> Any:
+    """The corpus spells the timer's unit payload as the string ``"()"``.
+
+    Mapping the *real* value into the fixture's spelling keeps the fixture value
+    on the asserted side of the comparison. Reading the fixture to pick which
+    literal to expect (``() if exp["value"] == "()" else None``) would let any
+    other spelling silently expect ``None`` (#lzconsumednotasserted).
+    """
+    return "()" if value == () else value
 
 
 def _run_timer(fx: dict) -> None:
@@ -73,12 +77,11 @@ def _run_timer(fx: dict) -> None:
         assert edge == step["returns"], f"timer step {i}: fire edge"
 
         exp = step["expected"]
-        assert timer.has_fired() == exp["fired"], f"timer step {i}: fired"
-        want_value = () if exp["value"] == "()" else None
-        assert timer.value() == want_value, f"timer step {i}: value"
-        assert timer.next_fire() == exp["next_fire"], f"timer step {i}: next_fire"
+        assert_key(exp, "fired", timer.has_fired(), where=f"timer step {i}")
+        assert_key(exp, "value", _unit(timer.value()), where=f"timer step {i}")
+        assert_key(exp, "next_fire", timer.next_fire(), where=f"timer step {i}")
 
-        _assert_inval(ctx, observed, exp["invalidates"]["fired"], "fired")
+        _assert_inval(ctx, observed, exp, "fired", i)
 
 
 def _run_interval(fx: dict) -> None:
@@ -91,10 +94,10 @@ def _run_interval(fx: dict) -> None:
         assert edge == step["returns"], f"interval step {i}: fire edge"
 
         exp = step["expected"]
-        assert iv.count() == exp["count"], f"interval step {i}: count"
-        assert iv.next_fire() == exp["next_fire"], f"interval step {i}: next_fire"
+        assert_key(exp, "count", iv.count(), where=f"interval step {i}")
+        assert_key(exp, "next_fire", iv.next_fire(), where=f"interval step {i}")
 
-        _assert_inval(ctx, observed, exp["invalidates"]["count"], "count")
+        _assert_inval(ctx, observed, exp, "count", i)
 
 
 def _run_cron(fx: dict) -> None:
@@ -107,10 +110,10 @@ def _run_cron(fx: dict) -> None:
         assert edge == step["returns"], f"cron step {i}: fire edge"
 
         exp = step["expected"]
-        assert cron.count() == exp["count"], f"cron step {i}: count"
-        assert cron.next_fire() == exp["next_fire"], f"cron step {i}: next_fire"
+        assert_key(exp, "count", cron.count(), where=f"cron step {i}")
+        assert_key(exp, "next_fire", cron.next_fire(), where=f"cron step {i}")
 
-        _assert_inval(ctx, observed, exp["invalidates"]["count"], "count")
+        _assert_inval(ctx, observed, exp, "count", i)
 
 
 def _run_deadline(fx: dict) -> None:
@@ -125,11 +128,13 @@ def _run_deadline(fx: dict) -> None:
 
         exp = step["expected"]
         state = d.state()
-        assert state.state.value == exp["state"], f"deadline step {i}: state"
-        assert state.value == exp["value"], f"deadline step {i}: value"
-        assert state.is_expired() == (exp["state"] == "Expired")
+        want_state = assert_key(
+            exp, "state", state.state.value, where=f"deadline step {i}"
+        )
+        assert_key(exp, "value", state.value, where=f"deadline step {i}")
+        assert state.is_expired() == (want_state == "Expired")
 
-        _assert_inval(ctx, observed, exp["invalidates"]["state"], "state")
+        _assert_inval(ctx, observed, exp, "state", i)
 
 
 def test_temporal_conformance() -> None:

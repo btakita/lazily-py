@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from conformance_assert import instrument
+from conformance_assert import assert_key_with, instrument
 
 import lazily
 
@@ -221,29 +221,41 @@ def _replay(flavor: _Flavor, fixture_name: str) -> None:
             )
 
         got_order = flavor.keys_untracked()
-        assert got_order == list(expected["order"]), (
-            f"{where(i)}: order is {got_order}, expected {expected['order']}"
+        assert_key_with(
+            expected,
+            "order",
+            lambda want, got_order=got_order: got_order == list(want),
+            where=f"{where(i)}: order is {got_order}",
         )
 
         if "membership" in expected:
-            assert set(expected["membership"]) == set(got_order), (
-                f"{where(i)}: membership set diverged"
+            assert_key_with(
+                expected,
+                "membership",
+                lambda want, got_order=got_order: set(want) == set(got_order),
+                where=f"{where(i)}: membership set",
             )
 
-        for key, want in (expected.get("values") or {}).items():
-            got, present = flavor.value_untracked(key)
-            assert present, f"{where(i)}: value for {key} is absent"
-            assert got == int(want), (
-                f"{where(i)}: value for {key} is {got}, expected {want}"
-            )
+        def _values(want: dict, i: int = i) -> None:
+            for key, value in want.items():
+                got, present = flavor.value_untracked(key)
+                assert present, f"{where(i)}: value for {key} is absent"
+                assert got == int(value), (
+                    f"{where(i)}: value for {key} is {got}, expected {value}"
+                )
+
+        if "values" in expected:
+            assert_key_with(expected, "values", _values, where=where(i))
 
         # The invalidation matrix, read from expected.invalidates - where the
         # fixtures actually nest it. lazily-rs read it off the step instead, so
         # its assertion never ran once.
-        invalidates = expected.get("invalidates")
-        assert invalidates is not None, (
+        assert "invalidates" in expected, (
             f"{where(i)}: expected.invalidates is missing - the matrix is the contract"
         )
+        # Every branch below compares against this matrix, so reading it here
+        # books the assertion (#lzconsumednotasserted).
+        invalidates = assert_key_with(expected, "invalidates", where=where(i))
         matrices += 1
 
         dirty = set(invalidates.get("value") or [])
@@ -276,18 +288,24 @@ def _replay(flavor: _Flavor, fixture_name: str) -> None:
         # Handle stability: the law separating an atomic move from a remove +
         # re-mint. A reorder keeps the entry's node, so dependents and lineage
         # survive.
-        for key, want_stable in (expected.get("handle_stable") or {}).items():
-            after = flavor.entry_identity(key)
-            before = ids_before.get(key)
-            if want_stable:
-                assert before is not None and after is before, (
-                    f"{where(i)}: handle for {key} must survive the move - "
-                    "a reorder that re-mints is a remove + insert, not a move"
-                )
-            else:
-                assert before is None or after is None or after is not before, (
-                    f"{where(i)}: handle for {key} should have changed"
-                )
+        def _handle_stable(
+            want: dict, i: int = i, ids_before: dict = ids_before
+        ) -> None:
+            for key, want_stable in want.items():
+                after = flavor.entry_identity(key)
+                before = ids_before.get(key)
+                if want_stable:
+                    assert before is not None and after is before, (
+                        f"{where(i)}: handle for {key} must survive the move - "
+                        "a reorder that re-mints is a remove + insert, not a move"
+                    )
+                else:
+                    assert before is None or after is None or after is not before, (
+                        f"{where(i)}: handle for {key} should have changed"
+                    )
+
+        if "handle_stable" in expected:
+            assert_key_with(expected, "handle_stable", _handle_stable, where=where(i))
 
     assert matrices > 0, (
         f"{flavor.name}: fixture {fixture_name} asserted no invalidation matrix"

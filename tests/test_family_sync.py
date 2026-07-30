@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from conformance_assert import instrument
+from conformance_assert import assert_key, assert_key_with, instrument
 
 from lazily import CrdtPlaneRuntime, CrdtSync
 
@@ -63,40 +63,60 @@ def test_family_sync_materialize_on_ingest() -> None:
         applied = target.apply_frame(CrdtSync.new(frame.frontier, frame.ops))
         assert applied > 0, f"[{name}] ingest applied at least one op"
 
-        if scenario.get("reingest"):
-            reapplied = target.apply_frame(CrdtSync.new(frame.frontier, frame.ops))
-            assert reapplied == scenario["expect"]["reingest_applied"], (
-                f"[{name}] re-ingest is idempotent"
-            )
-
         expect = scenario["expect"]
 
-        got_keys = sorted(_suffix_of(k) for k in target.family_keys(namespace))
-        want_keys = sorted(expect["target_keys"])
-        assert got_keys == want_keys, f"[{name}] materialized key set"
+        if scenario.get("reingest"):
+            reapplied = target.apply_frame(CrdtSync.new(frame.frontier, frame.ops))
+            assert_key(
+                expect, "reingest_applied", reapplied, where=f"[{name}] re-ingest"
+            )
 
-        assert len(target.family_keys(namespace)) == expect["target_present_count"], (
-            f"[{name}] present count"
+        got_keys = sorted(_suffix_of(k) for k in target.family_keys(namespace))
+        assert_key_with(
+            expect,
+            "target_keys",
+            lambda want, got_keys=got_keys: got_keys == sorted(want),
+            where=f"[{name}] materialized key set",
         )
 
-        for key, want in expect["target_values"].items():
-            assert target.family_value_lww(namespace, key) == want, (
-                f"[{name}] value for {key}"
-            )
+        assert_key(
+            expect,
+            "target_present_count",
+            len(target.family_keys(namespace)),
+            where=f"[{name}] present count",
+        )
+
+        assert_key_with(
+            expect,
+            "target_values",
+            lambda want, target=target: {
+                key: target.family_value_lww(namespace, key) for key in want
+            }
+            == want,
+            where=f"[{name}] materialized values",
+        )
 
         count_true = sum(
             1
             for k in target.family_keys(namespace)
             if target.family_value_lww(namespace, _suffix_of(k)) is True
         )
-        assert count_true == expect["target_count_true"], (
-            f"[{name}] derived count of true entries"
+        assert_key(
+            expect,
+            "target_count_true",
+            count_true,
+            where=f"[{name}] derived count of true entries",
         )
 
-        if expect["target_epoch_bumped"]:
-            assert target.membership_epoch() != epoch_before, (
-                f"[{name}] membership epoch bumped on materialize"
-            )
+        # Assert the bump both ways. Reading the flag to *gate* the check let a
+        # `false` scenario pass while the epoch bumped anyway
+        # (#lzconsumednotasserted).
+        assert_key(
+            expect,
+            "target_epoch_bumped",
+            target.membership_epoch() != epoch_before,
+            where=f"[{name}] membership epoch on materialize",
+        )
 
 
 def test_family_set_local_read_back() -> None:

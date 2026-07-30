@@ -59,7 +59,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conformance_assert import instrument
+from conformance_assert import assert_key, assert_key_with, instrument
 
 import lazily
 
@@ -315,12 +315,21 @@ def _assert_scope_state(where: str, cell: Any, key: str, want: dict[str, Any]) -
 
 
 def _assert_state(where: str, cell: Any, expected: dict[str, Any]) -> None:
-    for key, want in expected["scopes"].items():
-        _assert_scope_state(where, cell, key, want)
-    receipts = expected["receipts"]
-    assert len(cell.accepted()) == receipts["accepted"], f"{where}: accepted receipts"
-    assert len(cell.dropped()) == receipts["dropped"], f"{where}: dropped receipts"
-    assert len(cell.errors()) == receipts["error"], f"{where}: error receipts"
+    def _scopes(want: dict[str, Any]) -> None:
+        for key, want_scope in want.items():
+            _assert_scope_state(where, cell, key, want_scope)
+
+    assert_key_with(expected, "scopes", _scopes, where=where)
+    assert_key(
+        expected,
+        "receipts",
+        {
+            "accepted": len(cell.accepted()),
+            "dropped": len(cell.dropped()),
+            "error": len(cell.errors()),
+        },
+        where=where,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -400,8 +409,10 @@ def _replay(flavor: type[_Flavor], fixture_name: str) -> int:
         where = f"{flavor.name} {fixture_name} step {index} ({step['op']['type']})"
         expected = step.get("expected")
         assert expected is not None, f"{where}: expected block is missing"
-        invalidates = expected.get("invalidates")
-        assert invalidates is not None, f"{where}: invalidation matrix is missing"
+        assert "invalidates" in expected, f"{where}: invalidation matrix is missing"
+        # `_assert_invalidation` compares every probe against this matrix, so the
+        # read here books the assertion (#lzconsumednotasserted).
+        invalidates = assert_key_with(expected, "invalidates", where=where)
 
         before = _snapshot(cell, keys)
         actual = _apply_op(where, cell, step["op"])

@@ -18,7 +18,7 @@ import json
 from pathlib import Path
 
 import pytest
-from conformance_assert import instrument
+from conformance_assert import assert_key, assert_key_with, instrument
 
 from lazily.lossless_tree_crdt import (
     LEAF_KIND_FROM_WIRE,
@@ -131,21 +131,36 @@ def _apply_step(world: _World, step: dict) -> None:
 
 def _assert_expect(world: _World, expect: dict, label: str) -> None:
     if "render" in expect:
-        assert world.replicas["a"].render() == expect["render"], f"{label}: render on a"
-    if "render_on" in expect:
-        for name, text in expect["render_on"].items():
-            assert world.replicas[name].render() == text, f"{label}: render on {name}"
-    if "live_nodes" in expect:
-        assert world.replicas["a"].live_node_count() == expect["live_nodes"], (
-            f"{label}: live_nodes"
+        assert_key(
+            expect,
+            "render",
+            world.replicas["a"].render(),
+            where=f"{label}: render on a",
         )
-    if "converged" in expect:
-        names = expect["converged"]
+    if "render_on" in expect:
+        assert_key_with(
+            expect,
+            "render_on",
+            lambda want: {name: world.replicas[name].render() for name in want} == want,
+            where=f"{label}: render_on",
+        )
+    if "live_nodes" in expect:
+        assert_key(
+            expect,
+            "live_nodes",
+            world.replicas["a"].live_node_count(),
+            where=f"{label}: live_nodes",
+        )
+
+    def _converged(names: list[str]) -> None:
         first = world.replicas[names[0]].render()
         for name in names[1:]:
             assert world.replicas[name].render() == first, (
                 f"{label}: {names[0]}/{name} converge"
             )
+
+    if "converged" in expect:
+        assert_key_with(expect, "converged", _converged, where=label)
 
 
 def _run_fixture(name: str) -> None:

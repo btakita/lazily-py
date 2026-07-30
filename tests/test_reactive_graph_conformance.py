@@ -70,7 +70,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conformance_assert import instrument
+from conformance_assert import assert_key_with, instrument
 
 from lazily import (
     Cell,
@@ -937,7 +937,10 @@ async def _replay(
         # the evaluation order is part of what a fixture pins, because a `read`
         # can re-register an edge that a `dependents_of` then counts.
         for key in sorted(expect):
-            want = expect[key]
+            # Reading the key through `assert_key_with` books the assertion: every
+            # arm below hands `want` to `check`, which compares it against the
+            # model (#lzconsumednotasserted).
+            want = assert_key_with(expect, key)
             if key == "note":
                 continue
             if key == "dependents_of":
@@ -1008,7 +1011,7 @@ async def _replay(
     if tail is None:
         return report
 
-    final = tail.get("final_state") or {}
+    final = assert_key_with(tail, "final_state") or {} if "final_state" in tail else {}
     for node_id, degree in (final.get("dependents_of") or {}).items():
         got = model.dependents_of(node_of(node_id))
         check(f"final.dependents_of.{node_id}", got, degree)
@@ -1022,7 +1025,9 @@ async def _replay(
         check(f"final.read.{node_id}", got_read, _ok(value))
         report.observation.reads[node_id] = got_read[1]
 
-    publish = tail.get("after_publish") or {}
+    publish = (
+        assert_key_with(tail, "after_publish") or {} if "after_publish" in tail else {}
+    )
     pop = publish.get("op")
     if pop is not None:
         assert pop["type"] == "set_cell", f"{name}: after_publish op must be set_cell"
@@ -1110,7 +1115,12 @@ def _run_corpus(model_cls: Any) -> None:
 
         # `observationally_equal`: the named scenarios must agree on every
         # observable, not merely each satisfy `expected` independently.
-        pair = (fixture.get("expected") or {}).get("observationally_equal")
+        tail_block = fixture.get("expected") or {}
+        pair = (
+            assert_key_with(tail_block, "observationally_equal")
+            if "observationally_equal" in tail_block
+            else None
+        )
         if pair:
             names = [s["name"] for s in fixture["scenarios"]]
             index = [names.index(scenario) for scenario in pair]

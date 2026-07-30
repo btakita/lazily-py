@@ -20,7 +20,7 @@ import json
 from pathlib import Path
 
 import pytest
-from conformance_assert import instrument
+from conformance_assert import assert_key, assert_key_with, instrument
 
 from lazily.command import (
     CallStateKind,
@@ -79,35 +79,50 @@ def _entry_dict(proj: CommandProjection, command_id: str) -> dict:
 def _run_frames_expect(
     proj: CommandProjection, frames: list[dict], expect: dict
 ) -> None:
-    terminal_cmd = None
+    terminal_after = (
+        assert_key_with(expect, "terminal_after_frame_index")
+        if "terminal_after_frame_index" in expect
+        else None
+    )
+    left_projection_unchanged: list[bool] = []
     for i, frame in enumerate(frames):
+        before_frame = proj.to_image().to_wire()
         _ingest_frame(proj, frame)
-        if "terminal_after_frame_index" in expect:
-            terminal_cmd = terminal_cmd or _first_command_id(frames)
-            want_terminal = i >= expect["terminal_after_frame_index"]
+        left_projection_unchanged.append(proj.to_image().to_wire() == before_frame)
+        if terminal_after is not None:
+            terminal_cmd = _first_command_id(frames)
+            want_terminal = i >= terminal_after
             entry = proj.entry(terminal_cmd)
             assert entry is not None
             assert entry.terminal == want_terminal, (
                 f"frame {i}: terminal={entry.terminal} want {want_terminal}"
             )
-        if "ignored_frame_indices" in expect and i in expect["ignored_frame_indices"]:
-            # Ignored frames are stale/late; status stays as it was. The exact
-            # status is pinned by the projection expectation below.
-            pass
 
-    if "projection" in expect:
+    def _projection(want: dict) -> None:
         image = proj.to_image()
-        assert image.generation == expect["projection"]["generation"]
-        expected_cmds = expect["projection"]["commands"]
+        assert image.generation == want["generation"]
+        expected_cmds = want["commands"]
         assert len(image.commands) == len(expected_cmds)
         for got, exp in zip(image.commands, expected_cmds, strict=True):
             assert got.to_wire() == exp
 
-    if "ignored_frame_indices" in expect:
-        # The ignored frames did not mutate the projection; verify by
-        # re-asserting the projected status matches the expected commands.
+    if "projection" in expect:
+        assert_key_with(expect, "projection", _projection)
+
+    def _ignored(want: list[int]) -> None:
+        # An ignored frame must be REPORTED as non-mutating, not merely left
+        # unchecked: `pass` here read the index list and asserted nothing
+        # (#lzconsumednotasserted).
+        for index in want:
+            assert left_projection_unchanged[index], (
+                f"frame {index} was supposed to be ignored, but it moved the projection"
+            )
+        # And the projection those frames failed to touch still matches.
         for exp in expect["projection"]["commands"]:
             assert _entry_dict(proj, exp["command_id"]) == exp
+
+    if "ignored_frame_indices" in expect:
+        assert_key_with(expect, "ignored_frame_indices", _ignored)
 
 
 def _first_command_id(frames: list[dict]) -> str:
@@ -162,23 +177,22 @@ def test_terminal_conflict_fail_closed_detail() -> None:
     frames = fixture["frames"]
     expect = fixture["expect"]
     cmd = _first_command_id(frames)
-    assert cmd == expect["conflict_command_id"]
+    assert_key(expect, "conflict_command_id", cmd)
 
     # The conflict lands on the frame the fixture names, and NOT before it: a
     # reducer that flagged a conflict at frame 1 would still end up "in
     # conflict" without failing closed at the right point.
-    conflict_at = expect["conflict_after_frame_index"]
+    conflict_at = assert_key_with(expect, "conflict_after_frame_index")
     for index, frame in enumerate(frames[:conflict_at]):
         _ingest_frame(proj, frame)
         assert not proj.has_conflict(cmd), f"conflict raised early at frame {index}"
-    before = proj.to_image().to_wire()
-    assert before == expect["projection_before_conflict"]
+    assert_key(expect, "projection_before_conflict", proj.to_image().to_wire())
     assert proj.entry(cmd).status is CommandStatus.APPLIED
 
     # Frame 2: conflicting rejected receipt -> fail closed, applied preserved.
     status = _ingest_frame(proj, frames[conflict_at])
     assert status is CommandApplyStatus.TERMINAL_CONFLICT
-    assert proj.has_conflict(cmd) is expect["conflict"]
+    assert_key(expect, "conflict", proj.has_conflict(cmd))
     assert proj.entry(cmd).status is CommandStatus.APPLIED  # unchanged
     assert proj.last_conflict is not None
     assert proj.last_conflict.command_id == cmd
@@ -192,7 +206,7 @@ def test_stale_generation_ignored_detail() -> None:
     cmd = _first_command_id(fixture["frames"])
     for i, frame in enumerate(fixture["frames"]):
         status = _ingest_frame(proj, frame)
-        if i in fixture["expect"]["ignored_frame_indices"]:
+        if i in assert_key_with(fixture["expect"], "ignored_frame_indices"):
             assert status is CommandApplyStatus.STALE_GENERATION
     assert proj.entry(cmd).status is CommandStatus.SUBMITTED
     assert not proj.entry(cmd).terminal
@@ -222,8 +236,9 @@ def test_cancel_preempts_then_cancel_after_applied_ignored() -> None:
 def test_rpc_call_resolves_only_on_terminal_receipt() -> None:
     fixture = _fixture("rpc_call_waits_for_terminal.json")
     frames = fixture["frames"]
-    expect = fixture["expect"]["rpc"]
+    expect = assert_key_with(fixture["expect"], "rpc")
     cmd = _first_command_id(frames)
+    assert cmd == expect["command_id"]
 
     transport = _Transport()
     client = CommandRpcClient(transport)

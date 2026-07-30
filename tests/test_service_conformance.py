@@ -20,12 +20,11 @@ import json
 from pathlib import Path
 from typing import Any
 
-from conformance_assert import instrument
+from conformance_assert import assert_invalidates, assert_key, instrument
 
 from lazily import Slot
 from lazily.service import (
     DiscoveryCell,
-    Health,
     HealthCell,
     ReadinessCell,
     ServiceRegistry,
@@ -51,18 +50,11 @@ def _observer(ctx: dict, read: Any) -> Slot:
     return s
 
 
-def _assert_inval(ctx: dict, observer: Slot, invalidates: dict, reader: str) -> None:
-    if reader not in invalidates:
-        return
+def _assert_inval(
+    ctx: dict, observer: Slot, expected: dict, reader: str, step: int
+) -> None:
     cached = observer.is_in(ctx)
-    if invalidates[reader]:
-        assert not cached, (
-            f"reader `{reader}` should have been invalidated but stayed cached"
-        )
-    else:
-        assert cached, (
-            f"reader `{reader}` should have stayed cached but was invalidated"
-        )
+    assert_invalidates(expected, {reader: not cached}, where=f"step {step}")
 
 
 def _run_health(fixture: dict) -> None:
@@ -75,10 +67,9 @@ def _run_health(fixture: dict) -> None:
         cell.set(op["name"], op["up"], op["critical"])
 
         expected = step["expected"]
-        want = Health(expected["health"])
-        assert cell.health() is want, f"step {i}: health {cell.health()} want {want}"
+        assert_key(expected, "health", cell.health().value, where=f"step {i}")
 
-        _assert_inval(ctx, observer, expected.get("invalidates", {}), "health")
+        _assert_inval(ctx, observer, expected, "health", i)
         observer(ctx)  # re-materialize
 
 
@@ -92,9 +83,9 @@ def _run_readiness(fixture: dict) -> None:
         cell.set(op["name"], op["ready"])
 
         expected = step["expected"]
-        assert cell.ready() == expected["ready"], f"step {i}: ready mismatch"
+        assert_key(expected, "ready", cell.ready(), where=f"step {i}")
 
-        _assert_inval(ctx, observer, expected.get("invalidates", {}), "ready")
+        _assert_inval(ctx, observer, expected, "ready", i)
         observer(ctx)
 
 
@@ -121,9 +112,9 @@ def _run_discovery(fixture: dict) -> None:
             raise AssertionError(f"unknown discovery op type: {op_type}")
 
         expected = step["expected"]
-        assert cell.discovery() == expected["discovery"], f"step {i}: map mismatch"
+        assert_key(expected, "discovery", cell.discovery(), where=f"step {i}")
 
-        _assert_inval(ctx, observer, expected.get("invalidates", {}), "discovery")
+        _assert_inval(ctx, observer, expected, "discovery", i)
         observer(ctx)
 
 
@@ -145,11 +136,9 @@ def _run_service_registry(fixture: dict) -> None:
             raise AssertionError(f"unknown registry op type: {op_type}")
 
         expected = step["expected"]
-        assert reg.projection() == expected["projection"], (
-            f"step {i}: projection mismatch"
-        )
+        assert_key(expected, "projection", reg.projection(), where=f"step {i}")
 
-        _assert_inval(ctx, observer, expected.get("invalidates", {}), "projection")
+        _assert_inval(ctx, observer, expected, "projection", i)
         observer(ctx)
 
 

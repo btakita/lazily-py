@@ -18,7 +18,12 @@ import json
 from pathlib import Path
 from typing import Any
 
-from conformance_assert import instrument
+from conformance_assert import (
+    assert_invalidates,
+    assert_key,
+    assert_key_with,
+    instrument,
+)
 
 from lazily import Slot
 from lazily.presence import AwarenessCell, EphemeralCell, PresenceCell
@@ -44,19 +49,10 @@ def _observer(ctx: dict, reader: Any) -> Slot:  # type: ignore[type-arg]
 
 
 def _assert_invalidation(
-    ctx: dict, observer: Slot, invalidates: dict, reader_name: str
+    ctx: dict, observer: Slot, expected: dict, reader_name: str, step: int
 ) -> None:
-    if reader_name in invalidates:
-        expected_inv = invalidates[reader_name]
-        cached = observer.is_in(ctx)
-        if expected_inv:
-            assert not cached, (
-                f"reader `{reader_name}` should have been invalidated but stayed cached"
-            )
-        else:
-            assert cached, (
-                f"reader `{reader_name}` should have stayed cached but was invalidated"
-            )
+    cached = observer.is_in(ctx)
+    assert_invalidates(expected, {reader_name: not cached}, where=f"step {step}")
     observer(ctx)  # re-materialize for the next step
 
 
@@ -84,10 +80,13 @@ def _run_presence(fixture: dict) -> None:
             raise AssertionError(f"unknown presence op: {op_type}")
 
         expected = step["expected"]
-        assert cell.present() == _want_map(expected["present"]), (
-            f"step {i}: present mismatch after {op}"
+        assert_key_with(
+            expected,
+            "present",
+            lambda want: cell.present() == _want_map(want),
+            where=f"step {i} after {op}",
         )
-        _assert_invalidation(ctx, observer, expected["invalidates"], "present")
+        _assert_invalidation(ctx, observer, expected, "present", i)
 
 
 def _run_awareness(fixture: dict) -> None:
@@ -108,10 +107,13 @@ def _run_awareness(fixture: dict) -> None:
             raise AssertionError(f"unknown awareness op: {op_type}")
 
         expected = step["expected"]
-        assert cell.present() == _want_map(expected["present"]), (
-            f"step {i}: present mismatch after {op}"
+        assert_key_with(
+            expected,
+            "present",
+            lambda want: cell.present() == _want_map(want),
+            where=f"step {i} after {op}",
         )
-        _assert_invalidation(ctx, observer, expected["invalidates"], "present")
+        _assert_invalidation(ctx, observer, expected, "present", i)
 
 
 def _run_ephemeral(fixture: dict) -> None:
@@ -131,8 +133,8 @@ def _run_ephemeral(fixture: dict) -> None:
             raise AssertionError(f"unknown ephemeral op: {op_type}")
 
         expected = step["expected"]
-        assert cell.value() == expected["value"], f"step {i}: value mismatch after {op}"
-        _assert_invalidation(ctx, observer, expected["invalidates"], "value")
+        assert_key(expected, "value", cell.value(), where=f"step {i} after {op}")
+        _assert_invalidation(ctx, observer, expected, "value", i)
 
 
 def test_presence_conformance() -> None:

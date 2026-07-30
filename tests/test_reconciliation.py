@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 
 import pytest
-from conformance_assert import instrument
+from conformance_assert import assert_key, assert_key_with, instrument
 
 from lazily import Level, ReconcileOp, reconcile_ops
 from lazily.reconciliation import common_keys, idx_in, lis_by, moved_keys, stable_keys
@@ -136,7 +136,14 @@ def test_keyed_reconciliation_lis_fixture() -> None:
     # b and c are stable keys, must NOT be invalidated (no move/update).
     assert ("move", "b") not in op_keys and ("move", "c") not in op_keys
     assert ("update", "b") not in op_keys and ("update", "c") not in op_keys
-    assert expected["stable_keys_not_invalidated"] == ["b", "c"]
+    assert_key_with(
+        expected,
+        "stable_keys_not_invalidated",
+        lambda want: all(
+            ("move", key) not in op_keys and ("update", key) not in op_keys
+            for key in want
+        ),
+    )
 
     # `ops` is the MINIMAL op set, so the emitted ops must match it exactly —
     # spot-checking membership above would pass just as happily for a
@@ -147,7 +154,7 @@ def test_keyed_reconciliation_lis_fixture() -> None:
         else {"type": op.kind, "key": op.key, "after": op.after}
         for op in ops
     ]
-    assert emitted == expected["ops"]
+    assert_key(expected, "ops", emitted)
 
     # And applying that op set to the prior order yields the target order.
     order = list(prior.order)
@@ -157,4 +164,4 @@ def test_keyed_reconciliation_lis_fixture() -> None:
         elif op.kind == "move":
             order.remove(op.key)
             order.insert(order.index(op.after) + 1 if op.after else 0, op.key)
-    assert order == expected["result_order"]
+    assert_key(expected, "result_order", order)

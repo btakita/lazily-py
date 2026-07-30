@@ -20,7 +20,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from conformance_assert import instrument
+from conformance_assert import assert_invalidates, assert_key, instrument
 
 from lazily import (
     QueueCell,
@@ -89,50 +89,37 @@ def _build_initial(ctx: dict, initial: dict) -> QueueCell[str]:
     return q
 
 
-def _assert_state(q: QueueCell[str], expected: dict) -> None:
-    if "elements" in expected:
-        assert q.elements() == expected["elements"], "elements mismatch"
-    if "head" in expected:
-        want = expected["head"]
-        assert q.head() == want, f"head mismatch: {q.head()} want {want}"
-    if "len" in expected:
-        assert q.len() == expected["len"], "len mismatch"
-    if "is_empty" in expected:
-        assert q.is_empty() == expected["is_empty"], "is_empty mismatch"
-    if "is_full" in expected:
-        assert q.is_full() == expected["is_full"], "is_full mismatch"
-    if "closed" in expected:
-        assert q.is_closed() == expected["closed"], "closed mismatch"
+def _assert_state(q: QueueCell[str], expected: dict, where: str) -> None:
+    observations = {
+        "elements": q.elements,
+        "head": q.head,
+        "len": q.len,
+        "is_empty": q.is_empty,
+        "is_full": q.is_full,
+        "closed": q.is_closed,
+    }
+    for name, observe in observations.items():
+        if name in expected:
+            assert_key(expected, name, observe(), where=where)
 
 
-def _assert_invalidation(ctx: dict, readers: _Readers, invalidates: dict) -> None:
+def _assert_invalidation(
+    ctx: dict, readers: _Readers, expected: dict, where: str
+) -> None:
     """Assert the per-reader-kind invalidation matrix for one step, then
     re-materialize for the next step.
 
-    A reader kind explicitly present in ``invalidates`` is asserted
-    (``True`` ⇒ must invalidate, ``False`` ⇒ must stay cached). A reader kind
-    **absent** from ``invalidates`` is not asserted.
+    Every reader kind the matrix names must be one this harness observes, or the
+    fixture is expecting something of a reader nobody watched.
     """
-
-    def check(name: str, reader: Slot) -> None:
-        if name not in invalidates:
-            return
-        expected_inv = invalidates[name]
-        cached = reader.is_in(ctx)
-        if expected_inv:
-            assert not cached, (
-                f"reader `{name}` should have been invalidated but stayed cached"
-            )
-        else:
-            assert cached, (
-                f"reader `{name}` should have stayed cached but was invalidated"
-            )
-
-    check("head", readers.head)
-    check("len", readers.len)
-    check("is_empty", readers.is_empty)
-    check("is_full", readers.is_full)
-    check("closed", readers.closed)
+    observed = {
+        "head": not readers.head.is_in(ctx),
+        "len": not readers.len.is_in(ctx),
+        "is_empty": not readers.is_empty.is_in(ctx),
+        "is_full": not readers.is_full.is_in(ctx),
+        "closed": not readers.closed.is_in(ctx),
+    }
+    assert_invalidates(expected, observed, where=where)
 
     readers.materialize_all(ctx)
 
@@ -155,7 +142,7 @@ def _run_fixture(fixture: dict) -> None:
         op = step["op"]
         op_type = op["type"]
         expected = step.get("expected", {})
-        invalidates = expected.get("invalidates", {})
+        where = f"step {i}"
 
         got_returns: Any = None
         if op_type == "push":
@@ -182,7 +169,7 @@ def _run_fixture(fixture: dict) -> None:
         else:
             raise AssertionError(f"unknown queue op type: {op_type}")
 
-        _assert_state(q, expected)
+        _assert_state(q, expected, where)
 
         if "returns" in step:
             want = step["returns"]
@@ -190,7 +177,7 @@ def _run_fixture(fixture: dict) -> None:
                 f"step {i}: returns {got_returns!r} want {want!r}"
             )
 
-        _assert_invalidation(ctx, readers, invalidates)
+        _assert_invalidation(ctx, readers, expected, where)
 
 
 # ---------------------------------------------------------------------------

@@ -88,10 +88,14 @@ def pytest_sessionfinish(session, exitstatus) -> None:  # type: ignore[no-untype
         return
     report = [
         "",
-        "UNCONSUMED CONFORMANCE ASSERTION KEYS (#lzassertunknownkeys)",
-        "  A fixture asserts something no runner in this suite ever checked.",
-        "  Replaying a fixture is not testing it; implement the check (or, for",
-        "  narration rather than an assertion, declare it via tracked(prose=...)).",
+        "CONFORMANCE ASSERTION LEDGER FAILURES",
+        "  (#lzassertunknownkeys / #lzconsumednotasserted)",
+        "  A fixture asserts something this suite never really checked: a key no",
+        "  runner read, a key a runner read and then discarded, or an excuse that",
+        "  has gone stale. Replaying a fixture is not testing it, and neither is",
+        "  reading a key. Implement the check via assert_key/assert_key_with,",
+        "  declare excuse_key(block, key, reason), or — for narration rather than",
+        "  an assertion — declare it via tracked(prose=...).",
         "",
     ]
     report += [f"  {line}" for line in failures]

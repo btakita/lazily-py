@@ -20,7 +20,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from conformance_assert import instrument
+from conformance_assert import assert_invalidates, assert_key, instrument
 
 from lazily import Slot, Sum
 from lazily.windowing import (
@@ -54,14 +54,12 @@ def _observer(ctx: dict, cell: Any) -> Slot:
 
 def _check(ctx: dict, observed: Slot, step: dict, out: Any) -> None:
     expected = step.get("expected", {})
-    assert out == expected.get("output"), f"output mismatch for {step}"
-    invalidates = expected.get("invalidates", {})
-    if "output" in invalidates:
-        cached = observed.is_in(ctx)
-        if invalidates["output"]:
-            assert not cached, f"output should have invalidated for {step}"
-        else:
-            assert cached, f"output should have stayed cached for {step}"
+    if "output" in expected:
+        assert_key(expected, "output", out, where=f"{step['op']}")
+    else:
+        assert out is None, f"no expected output declared, got {out!r} for {step}"
+    cached = observed.is_in(ctx)
+    assert_invalidates(expected, {"output": not cached}, where=f"{step['op']}")
     observed(ctx)  # re-materialize for the next step
 
 

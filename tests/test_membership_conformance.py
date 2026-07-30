@@ -18,7 +18,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from conformance_assert import instrument
+from conformance_assert import assert_key, assert_key_with, instrument
 
 from lazily import Slot
 from lazily.membership import (
@@ -78,25 +78,26 @@ def _run_fixture(fixture: dict) -> None:
         expected = step["expected"]
 
         # Per-peer state.
-        for peer, want in expected["states"].items():
-            got = m.state(_coerce_peer(peer))
-            got_name = got.value if got is not None else None
-            assert got_name == want, (
-                f"step {i}: state of peer {peer} is {got_name!r}, want {want!r}"
-            )
+        def _states(want: dict, m: MembershipCell = m) -> bool:
+            got = {}
+            for peer in want:
+                state = m.state(_coerce_peer(peer))
+                got[peer] = state.value if state is not None else None
+            return got == want
+
+        assert_key_with(expected, "states", _states, where=f"step {i}")
 
         # Alive set.
-        want_set = {_coerce_peer(p) for p in expected["alive_set"]}
-        assert m.peer_set() == want_set, (
-            f"step {i}: alive_set {m.peer_set()} want {want_set}"
+        assert_key_with(
+            expected,
+            "alive_set",
+            lambda want: m.peer_set() == {_coerce_peer(p) for p in want},
+            where=f"step {i}",
         )
 
         # Peer-set invalidation: cached ⇒ not invalidated.
         was_cached = observed.is_in(ctx)
-        assert (not was_cached) == bool(expected["invalidates"]), (
-            f"step {i}: invalidation mismatch (was_cached={was_cached}, "
-            f"want invalidates={expected['invalidates']})"
-        )
+        assert_key(expected, "invalidates", not was_cached, where=f"step {i}")
         observed(ctx)  # re-materialize for the next step
 
 

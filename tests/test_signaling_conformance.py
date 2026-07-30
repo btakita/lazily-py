@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from conformance_assert import instrument
+from conformance_assert import assert_key, instrument
 
 from lazily.signaling import (
     PermissionMode,
@@ -62,35 +62,27 @@ def test_signaling_frames_round_trip() -> None:
         # key the fixture names has to reach a real attribute of the decoded
         # frame (#lzassertunknownkeys).
         a = frame["assertions"]
-        if "peer" in a:
-            assert decoded.peer == a["peer"], f"{label}: peer"
-        if "to" in a:
-            assert decoded.to == a["to"], f"{label}: to"
-        if "from" in a:
-            assert decoded.frm == a["from"], f"{label}: from"
-        if "code" in a:
-            assert decoded.code == a["code"], f"{label}: code"
-        if "peers" in a:
-            assert decoded.peers == a["peers"], f"{label}: peers"
-        if "capabilities" in a:
-            assert decoded.capabilities == a["capabilities"], f"{label}: capabilities"
-        if "has_capabilities" in a:
-            assert (decoded.capabilities is not None) is a["has_capabilities"], (
-                f"{label}: has_capabilities"
-            )
-        if "roster_excludes_self" in a:
-            assert (decoded.peer not in (decoded.peers or [])) is a[
-                "roster_excludes_self"
-            ], f"{label}: roster_excludes_self"
-        if "server_stamped_from" in a:
+        observed = {
+            "peer": decoded.peer,
+            "to": decoded.to,
+            "from": decoded.frm,
+            "code": decoded.code,
+            "peers": decoded.peers,
+            "capabilities": decoded.capabilities,
+            "has_capabilities": decoded.capabilities is not None,
+            "roster_excludes_self": decoded.peer not in (decoded.peers or []),
             # A server-forwarded frame carries `from` and never `to`; the value
             # is the sender's registered peer id, which the session fixture
             # below proves end-to-end.
-            assert (
+            "server_stamped_from": (
                 frame["direction"] == "server"
                 and decoded.frm is not None
                 and decoded.to is None
-            ) is a["server_stamped_from"], f"{label}: server_stamped_from"
+            ),
+        }
+        for key, got in observed.items():
+            if key in a:
+                assert_key(a, key, got, where=label)
 
 
 def test_signaling_anti_spoof_session() -> None:
@@ -139,9 +131,9 @@ def test_signaling_anti_spoof_session() -> None:
 
     assert saw_welcome, "transcript proves nothing about rosters without a welcome"
     assert saw_forward, "transcript proves nothing about anti-spoof without a forward"
-    assert rosters_exclude_self is a["roster_excludes_self"]
-    assert rosters_sorted is a["roster_sorted_ascending"]
-    assert forwarded_from_is_registered is a["forwarded_from_is_server_registered"]
+    assert_key(a, "roster_excludes_self", rosters_exclude_self)
+    assert_key(a, "roster_sorted_ascending", rosters_sorted)
+    assert_key(a, "forwarded_from_is_server_registered", forwarded_from_is_registered)
 
     for reject in fix["rejects"]:
         try:

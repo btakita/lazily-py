@@ -19,13 +19,12 @@ import json
 from pathlib import Path
 from typing import Any
 
-from conformance_assert import instrument
+from conformance_assert import assert_invalidates, assert_key, instrument
 
 from lazily import Slot
 from lazily.coordination import (
     BarrierCell,
     LeaderCell,
-    LeaderRole,
     LeaseCell,
     LockCell,
     SemaphoreCell,
@@ -53,24 +52,14 @@ def _observe(ctx: dict, cell: Any) -> Slot:
     return s
 
 
-def _invalidates(step: dict, reader: str) -> bool | None:
-    inv = step.get("expected", {}).get("invalidates", {})
-    return inv.get(reader)
-
-
 def _assert_inval(ctx: dict, observer: Slot, step: dict, reader: str) -> None:
     """Assert the observed reader's invalidation for one step, then
     re-materialize the observer for the next step."""
-    want = _invalidates(step, reader)
     was_cached = observer.is_in(ctx)
     observer(ctx)  # re-materialize
-    if want is None:
-        return
-    invalidated = not was_cached
-    if want:
-        assert invalidated, f"reader `{reader}` should have invalidated"
-    else:
-        assert not invalidated, f"reader `{reader}` should have stayed cached"
+    assert_invalidates(
+        step["expected"], {reader: not was_cached}, where=f"op {step['op']['type']}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -100,9 +89,9 @@ def _run_lease() -> None:
         if "returns" in step:
             assert got == step["returns"], f"lease returns: {got!r}"
         exp = step["expected"]
-        assert lease.holder(now) == exp["holder"], "holder mismatch"
-        assert lease.is_held(now) == exp["held"], "held mismatch"
-        assert lease.fence() == exp["fence"], "fence mismatch"
+        assert_key(exp, "holder", lease.holder(now))
+        assert_key(exp, "held", lease.is_held(now))
+        assert_key(exp, "fence", lease.fence())
 
         _assert_inval(ctx, observed, step, "holder")
 
@@ -128,8 +117,8 @@ def _run_leader() -> None:
             raise AssertionError(f"unknown leader op: {op_type}")
 
         exp = step["expected"]
-        assert role == LeaderRole(exp["role"]), f"role: {role}"
-        assert leader.current_leader(now) == exp["current_leader"], "leader mismatch"
+        assert_key(exp, "role", role.value)
+        assert_key(exp, "current_leader", leader.current_leader(now))
 
         _assert_inval(ctx, observed, step, "current_leader")
 
@@ -156,8 +145,8 @@ def _run_lock() -> None:
             assert got == step["returns"], f"lock returns: {got!r}"
         exp = step["expected"]
         now = op["now"]
-        assert lock.is_locked(now) == exp["is_locked"], "is_locked mismatch"
-        assert lock.fence() == exp["fence"], "fence mismatch"
+        assert_key(exp, "is_locked", lock.is_locked(now))
+        assert_key(exp, "fence", lock.fence())
 
         _assert_inval(ctx, observed, step, "is_locked")
 
@@ -181,7 +170,7 @@ def _run_semaphore() -> None:
         if "returns" in step:
             assert got == step["returns"], f"sem returns: {got!r}"
         exp = step["expected"]
-        assert sem.permits_available() == exp["permits_available"], "permits mismatch"
+        assert_key(exp, "permits_available", sem.permits_available())
 
         _assert_inval(ctx, observed, step, "permits_available")
 
@@ -198,8 +187,8 @@ def _run_quorum() -> None:
         if "returns" in step:
             assert got == step["returns"], f"quorum returns: {got!r}"
         exp = step["expected"]
-        assert q.count() == exp["votes"], "votes mismatch"
-        assert q.is_open() == exp["is_open"], "is_open mismatch"
+        assert_key(exp, "votes", q.count())
+        assert_key(exp, "is_open", q.is_open())
 
         _assert_inval(ctx, observed, step, "is_open")
 

@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from conformance_assert import instrument
+from conformance_assert import assert_key, assert_key_with, instrument
 
 from lazily import (
     CrdtOp,
@@ -52,30 +52,48 @@ def test_stableid_alignment_conformance() -> None:
     assert fix["model"] == "StableId"
     for sc in fix["scenarios"]:
         name = sc["name"]
+        expect = sc["expect"]
         if "blocks" in sc:
             # key-equality scenarios
-            blocks = sc["blocks"]
-            keys = [block_key(b) for b in blocks]
-            for i, j in sc["expect"].get("key_equal", []):
-                assert keys[i] == keys[j], f"{name}: key_equal [{i},{j}]"
-            for i, j in sc["expect"].get("key_not_equal", []):
-                assert keys[i] != keys[j], f"{name}: key_not_equal [{i},{j}]"
-            continue
-        if "new_key_equals_old_key" in sc["expect"]:
-            keys = assign_stable_keys(sc["old"], sc["new"])
-            for ni, oi in sc["expect"]["new_key_equals_old_key"]:
-                assert keys[ni] == block_key(sc["old"][oi]), (
-                    f"{name}: new[{ni}] key != old[{oi}] key"
+            keys = [block_key(b) for b in sc["blocks"]]
+            if "key_equal" in expect:
+                assert_key_with(
+                    expect,
+                    "key_equal",
+                    lambda want, keys=keys: all(keys[i] == keys[j] for i, j in want),
+                    where=f"{name}: key_equal",
                 )
+            if "key_not_equal" in expect:
+                assert_key_with(
+                    expect,
+                    "key_not_equal",
+                    lambda want, keys=keys: all(keys[i] != keys[j] for i, j in want),
+                    where=f"{name}: key_not_equal",
+                )
+            continue
+        if "new_key_equals_old_key" in expect:
+            keys = assign_stable_keys(sc["old"], sc["new"])
+            assert_key_with(
+                expect,
+                "new_key_equals_old_key",
+                lambda want, keys=keys, old=sc["old"]: all(
+                    keys[ni] == block_key(old[oi]) for ni, oi in want
+                ),
+                where=f"{name}: new key equals old key",
+            )
             continue
         if "old" in sc and "new" in sc:
             a = align(sc["old"], sc["new"])
-            assert a.matches == sc["expect"]["matches"], f"{name}: matches"
-            assert a.removed == sc["expect"]["removed"], f"{name}: removed"
-            if "similarity_min" in sc["expect"]:
-                lo = sc["expect"]["similarity_min"]
+            assert_key(expect, "matches", a.matches, where=name)
+            assert_key(expect, "removed", a.removed, where=name)
+            if "similarity_min" in expect:
                 sim = similarity(sc["old"][0]["text"], sc["new"][0]["text"])
-                assert sim >= lo, f"{name}: similarity {sim} < {lo}"
+                assert_key_with(
+                    expect,
+                    "similarity_min",
+                    lambda lo, sim=sim: sim >= lo,
+                    where=f"{name}: similarity {sim}",
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -89,11 +107,12 @@ def test_semtree_conformance() -> None:
     for sc in fix["scenarios"]:
         tree: SemTree[str, int] = SemTree.from_json(sc["tree"], fold=sc["fold"])  # type: ignore[arg-type]
         expect_initial = sc["expect_initial"]
-        for node_id, want in expect_initial.items():
-            if node_id.startswith("sibling_") or node_id.startswith("downstream_"):
-                continue
-            assert tree.derived(node_id) == want, (
-                f"{sc['name']}: initial derived({node_id})={tree.derived(node_id)} want {want}"
+        for node_id in list(expect_initial):
+            assert_key(
+                expect_initial,
+                node_id,
+                tree.derived(node_id),
+                where=f"{sc['name']}: initial derived({node_id})",
             )
         # Reset the recomputation counters after the warm-up so the edit-phase
         # counts measure ONLY the edit's effect.
@@ -102,26 +121,45 @@ def test_semtree_conformance() -> None:
             node.downstream_count = 0
         if "edit" in sc:
             tree.set_node_value(sc["edit"]["id"], sc["edit"]["value"])
-            for node_id, want in sc["expect_after"].items():
+            expect_after = sc["expect_after"]
+            for node_id in list(expect_after):
+                # These two are booleans ABOUT the recomputation, not node
+                # derivations, and both used to be skipped past after the loop
+                # had already marked them read (#lzconsumednotasserted). They are
+                # real observable facts, so they are asserted against the
+                # fixture's own value rather than a hardcoded 0.
                 if node_id == "sibling_a_cached":
                     # An edit to b1 must not recompute the sibling subtree 'a'.
-                    assert tree.node("a").compute_count == 0, (
-                        f"{sc['name']}: sibling 'a' was recomputed (not cached)"
+                    assert_key(
+                        expect_after,
+                        node_id,
+                        tree.node("a").compute_count == 0,
+                        where=f"{sc['name']}: sibling 'a' cached",
                     )
                     continue
                 if node_id == "downstream_consumer_reran":
-                    assert tree.node("root").downstream_count == 0, (
-                        f"{sc['name']}: downstream consumer re-ran (memo guard failed)"
+                    assert_key(
+                        expect_after,
+                        node_id,
+                        tree.node("root").downstream_count > 0,
+                        where=f"{sc['name']}: downstream consumer re-ran",
                     )
                     continue
-                assert tree.derived(node_id) == want, (
-                    f"{sc['name']}: after edit derived({node_id})={tree.derived(node_id)} want {want}"
+                assert_key(
+                    expect_after,
+                    node_id,
+                    tree.derived(node_id),
+                    where=f"{sc['name']}: after edit derived({node_id})",
                 )
         if "remove_child" in sc:
             tree.remove_child(sc["remove_child"]["parent"], sc["remove_child"]["child"])
-            for node_id, want in sc["expect_after"].items():
-                assert tree.derived(node_id) == want, (
-                    f"{sc['name']}: after remove derived({node_id})={tree.derived(node_id)} want {want}"
+            expect_after = sc["expect_after"]
+            for node_id in list(expect_after):
+                assert_key(
+                    expect_after,
+                    node_id,
+                    tree.derived(node_id),
+                    where=f"{sc['name']}: after remove derived({node_id})",
                 )
 
 
@@ -204,18 +242,39 @@ def test_textcrdt_convergence_conformance() -> None:
                 interp.r["a"] = TextCrdt.seed(peer, seed)
         interp.run(sc["steps"])
         exp = sc["expect"]
+        name = sc["name"]
         if "text" in exp:
-            assert interp.r["a"].text() == exp["text"], sc["name"]
+            assert_key(exp, "text", interp.r["a"].text(), where=name)
         if "len" in exp:
-            assert len(interp.r["a"]) == exp["len"], sc["name"]
+            assert_key(exp, "len", len(interp.r["a"]), where=name)
         if "tombstone_count" in exp:
-            assert interp.r["a"].tombstone_count() == exp["tombstone_count"], sc["name"]
-        for pair in exp.get("texts_equal", []):
-            assert interp.r[pair[0]].text() == interp.r[pair[1]].text(), sc["name"]
+            assert_key(
+                exp, "tombstone_count", interp.r["a"].tombstone_count(), where=name
+            )
+        if "texts_equal" in exp:
+            assert_key_with(
+                exp,
+                "texts_equal",
+                lambda want, interp=interp: all(
+                    interp.r[left].text() == interp.r[right].text()
+                    for left, right in want
+                ),
+                where=name,
+            )
         if "a_starts_with" in exp:
-            assert interp.r["a"].text().startswith(exp["a_starts_with"]), sc["name"]
+            assert_key_with(
+                exp,
+                "a_starts_with",
+                lambda want, interp=interp: interp.r["a"].text().startswith(want),
+                where=name,
+            )
         if "a_ends_with" in exp:
-            assert interp.r["a"].text().endswith(exp["a_ends_with"]), sc["name"]
+            assert_key_with(
+                exp,
+                "a_ends_with",
+                lambda want, interp=interp: interp.r["a"].text().endswith(want),
+                where=name,
+            )
 
 
 def test_textcrdt_delta_sync_conformance() -> None:
@@ -262,14 +321,35 @@ def test_textcrdt_delta_sync_conformance() -> None:
                 interp._op(interp.r[st["on"]], st)
                 continue
         exp = sc["expect"]
-        for pair in exp.get("texts_equal", []):
-            assert interp.r[pair[0]].text() == interp.r[pair[1]].text(), sc["name"]
-        for who, want in exp.get("text_on", {}).items():
-            assert interp.r[who].text() == want, f"{sc['name']}: text_on {who}"
-        for who, want in exp.get("version_vector_on", {}).items():
-            vv = interp.r[who].version_vector()
-            want_vv = {int(k): v for k, v in want.items()}
-            assert vv == want_vv, f"{sc['name']}: vv_on {who} got {vv} want {want_vv}"
+        name = sc["name"]
+        if "texts_equal" in exp:
+            assert_key_with(
+                exp,
+                "texts_equal",
+                lambda want, interp=interp: all(
+                    interp.r[left].text() == interp.r[right].text()
+                    for left, right in want
+                ),
+                where=name,
+            )
+        if "text_on" in exp:
+            assert_key_with(
+                exp,
+                "text_on",
+                lambda want, interp=interp: {who: interp.r[who].text() for who in want}
+                == want,
+                where=f"{name}: text_on",
+            )
+        if "version_vector_on" in exp:
+            assert_key_with(
+                exp,
+                "version_vector_on",
+                lambda want, interp=interp: all(
+                    interp.r[who].version_vector() == {int(k): v for k, v in vv.items()}
+                    for who, vv in want.items()
+                ),
+                where=f"{name}: version_vector_on",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -339,34 +419,74 @@ def test_seqcrdt_convergence_conformance() -> None:
         for who in exp.get("order_on", {}):
             merged_replicas.append(who)
         len_targets = merged_replicas if merged_replicas else ["a"]
+        name = sc["name"]
         if "order" in exp:
-            assert interp.r["a"].order() == exp["order"], sc["name"]
+            assert_key(exp, "order", interp.r["a"].order(), where=name)
         if "len" in exp:
-            for who in len_targets:
-                assert len(interp.r[who]) == exp["len"], (
-                    f"{sc['name']}: len({who})={len(interp.r[who])} want {exp['len']}"
-                )
+            assert_key_with(
+                exp,
+                "len",
+                lambda want, interp=interp, targets=len_targets: all(
+                    len(interp.r[who]) == want for who in targets
+                ),
+                where=f"{name}: len over {len_targets}",
+            )
         if "get" in exp:
-            for k, v in exp["get"].items():
-                assert interp.r["a"].get(k) == v, f"{sc['name']}: get({k})"
-        for who, want in exp.get("order_on", {}).items():
-            assert interp.r[who].order() == want, f"{sc['name']}: order_on {who}"
-        for who, gets in exp.get("get_on", {}).items():
-            for k, v in gets.items():
-                assert interp.r[who].get(k) == v, f"{sc['name']}: get_on {who} {k}"
-        for pair in exp.get("orders_equal", []):
-            assert interp.r[pair[0]].order() == interp.r[pair[1]].order(), sc["name"]
-        for who, items in exp.get("not_contains_on", {}).items():
-            for item in items:
-                assert item not in interp.r[who], (
-                    f"{sc['name']}: not_contains_on {who} {item}"
-                )
+            assert_key_with(
+                exp,
+                "get",
+                lambda want, interp=interp: {k: interp.r["a"].get(k) for k in want}
+                == want,
+                where=name,
+            )
+        if "order_on" in exp:
+            assert_key_with(
+                exp,
+                "order_on",
+                lambda want, interp=interp: {who: interp.r[who].order() for who in want}
+                == want,
+                where=f"{name}: order_on",
+            )
+        if "get_on" in exp:
+            assert_key_with(
+                exp,
+                "get_on",
+                lambda want, interp=interp: all(
+                    {k: interp.r[who].get(k) for k in gets} == gets
+                    for who, gets in want.items()
+                ),
+                where=f"{name}: get_on",
+            )
+        if "orders_equal" in exp:
+            assert_key_with(
+                exp,
+                "orders_equal",
+                lambda want, interp=interp: all(
+                    interp.r[left].order() == interp.r[right].order()
+                    for left, right in want
+                ),
+                where=name,
+            )
+        if "not_contains_on" in exp:
+            assert_key_with(
+                exp,
+                "not_contains_on",
+                lambda want, interp=interp: all(
+                    item not in interp.r[who]
+                    for who, items in want.items()
+                    for item in items
+                ),
+                where=f"{name}: not_contains_on",
+            )
         if "contains_all" in exp:
-            for item in exp["contains_all"]:
-                for who in len_targets:
-                    assert item in interp.r[who], (
-                        f"{sc['name']}: contains {item} on {who}"
-                    )
+            assert_key_with(
+                exp,
+                "contains_all",
+                lambda want, interp=interp, targets=len_targets: all(
+                    item in interp.r[who] for item in want for who in targets
+                ),
+                where=f"{name}: contains_all",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -389,14 +509,16 @@ def test_crdt_plane_anti_entropy_conformance() -> None:
     assert fix["model"] == "CrdtPlane"
     for sc in fix["scenarios"]:
         expect = sc["expect"]
+        name = sc["name"]
         plane = CrdtPlaneRuntime()
         applied = plane.apply_ops([_mk_crdtop(o) for o in sc["ops"]])
-        assert applied == expect["applied_count"], sc["name"]
+        assert_key(expect, "applied_count", applied, where=name)
 
         # `resolution`: the winner is the op with the greatest WireStamp, not
         # the last one delivered. Asserting the converged state alone cannot
-        # tell those apart when they coincide, so pin the rule itself.
-        assert expect["resolution"] == "max_stamp", sc["name"]
+        # tell those apart when they coincide, so pin the rule itself — and let
+        # the fixture's spelling select the rule to enforce, fail-closed, rather
+        # than checking it against a literal that asserts nothing about the plane.
         by_node: dict[int, dict] = {}
         for op in sc["ops"]:
             stamp = op["stamp"]
@@ -404,37 +526,48 @@ def test_crdt_plane_anti_entropy_conformance() -> None:
             best = by_node.get(op["node"])
             if best is None or key > best["_key"]:
                 by_node[op["node"]] = {**op, "_key": key}
-        for entry in plane.converged():
-            winner = by_node[entry.node]
-            assert entry.state == bytes(winner["state"]["Inline"]), (
-                f"{sc['name']}: node {entry.node} did not resolve to the max stamp"
+
+        def _resolution(
+            want: str, name: str = name, plane: Any = plane, by_node: dict = by_node
+        ) -> None:
+            assert want == "max_stamp", (
+                f"{name}: unimplemented resolution rule {want!r}"
             )
+            for entry in plane.converged():
+                winner = by_node[entry.node]
+                assert entry.state == bytes(winner["state"]["Inline"]), (
+                    f"{name}: node {entry.node} did not resolve to the max stamp"
+                )
+
+        assert_key_with(expect, "resolution", _resolution, where=name)
 
         if sc.get("redeliver"):
             rd = plane.apply_ops([_mk_crdtop(o) for o in sc["ops"]])
-            assert rd == expect["redeliver_applied_count"], sc["name"]
+            assert_key(expect, "redeliver_applied_count", rd, where=name)
         if sc.get("reverse_order_equivalent"):
             plane2 = CrdtPlaneRuntime()
             plane2.apply_ops([_mk_crdtop(o) for o in reversed(sc["ops"])])
             got = {(e.node, e.state) for e in plane.converged()}
             got2 = {(e.node, e.state) for e in plane2.converged()}
-            assert (got == got2) is expect["order_independent"], (
-                f"{sc['name']}: reverse order not equivalent"
-            )
-        for want in expect["converged"]:
-            matches = [
-                e
-                for e in plane.converged()
-                if e.node == want["node"]
-                and (
-                    (e.key is None and not want.get("key"))
-                    or (e.key is not None and e.key.path == want.get("key"))
+            assert_key(expect, "order_independent", got == got2, where=name)
+
+        def _converged(wants: list[dict], name: str = name, plane: Any = plane) -> None:
+            for want in wants:
+                matches = [
+                    e
+                    for e in plane.converged()
+                    if e.node == want["node"]
+                    and (
+                        (e.key is None and not want.get("key"))
+                        or (e.key is not None and e.key.path == want.get("key"))
+                    )
+                ]
+                assert matches, f"{name}: no converged entry for node {want['node']}"
+                assert matches[0].state == bytes(want["state"]["Inline"]), (
+                    f"{name}: converged state mismatch for node {want['node']}"
                 )
-            ]
-            assert matches, f"{sc['name']}: no converged entry for node {want['node']}"
-            assert matches[0].state == bytes(want["state"]["Inline"]), (
-                f"{sc['name']}: converged state mismatch for node {want['node']}"
-            )
+
+        assert_key_with(expect, "converged", _converged, where=name)
 
 
 def _canonicalize_crdt_sync_wire(wire: dict[str, Any]) -> dict[str, Any]:
@@ -466,18 +599,30 @@ def test_crdt_sync_frames_round_trip() -> None:
         )
         a = frame["assertions"]
         sync = msg.crdt_sync
+        label = frame["label"]
         if "frontier_len" in a:
-            assert len(sync.frontier) == a["frontier_len"], frame["label"]
+            assert_key(a, "frontier_len", len(sync.frontier), where=label)
         if "frontier_omitted" in a:
             # #lzspecfrontiersuppress: an omitted frontier decodes as empty.
-            assert a["frontier_omitted"] is True, frame["label"]
-            assert "frontier" not in wire["CrdtSync"], frame["label"]
-            assert sync.frontier == [], frame["label"]
-        assert len(sync.ops) == a["op_count"], frame["label"]
+            assert_key(
+                a, "frontier_omitted", "frontier" not in wire["CrdtSync"], where=label
+            )
+            assert sync.frontier == [], label
+        assert_key(a, "op_count", len(sync.ops), where=label)
+        # Both directions: these used to be membership gates, so a fixture
+        # declaring `false` still asserted the op WAS there
+        # (#lzconsumednotasserted).
         if "has_keyed_op" in a:
-            assert any(op.key is not None for op in sync.ops), frame["label"]
+            assert_key(
+                a,
+                "has_keyed_op",
+                any(op.key is not None for op in sync.ops),
+                where=label,
+            )
         if "has_keyless_op" in a:
-            assert any(op.key is None for op in sync.ops), frame["label"]
+            assert_key(
+                a, "has_keyless_op", any(op.key is None for op in sync.ops), where=label
+            )
         # Idempotent re-ingestion applies 0 new ops.
         plane = CrdtPlaneRuntime()
         plane.apply_frame(sync)

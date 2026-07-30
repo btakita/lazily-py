@@ -20,7 +20,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from conformance_assert import instrument
+from conformance_assert import assert_invalidates, assert_key, instrument
 
 
 if TYPE_CHECKING:
@@ -77,16 +77,13 @@ def _run(
         assert emitted == want_ret, f"step {i}: emit {emitted!r} want {want_ret!r}"
 
         expected = step.get("expected", {})
-        want_out = expected.get("output")
-        assert output() == want_out, f"step {i}: output {output()!r} want {want_out!r}"
+        if "output" in expected:
+            assert_key(expected, "output", output(), where=f"step {i}")
+        else:
+            assert output() is None, f"step {i}: undeclared output {output()!r}"
 
-        want_inv = expected.get("invalidates", {}).get("output")
-        if want_inv is not None:
-            cached = observer.is_in(ctx)
-            if want_inv:
-                assert not cached, f"step {i}: output should have invalidated"
-            else:
-                assert cached, f"step {i}: output should have stayed cached"
+        cached = observer.is_in(ctx)
+        assert_invalidates(expected, {"output": not cached}, where=f"step {i}")
 
         observer(ctx)  # re-materialize for the next step
 

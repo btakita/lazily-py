@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 import pytest
-from conformance_assert import instrument
+from conformance_assert import assert_key, instrument
 
 from lazily import (
     KeepLatest,
@@ -148,7 +148,8 @@ def test_mergecell_algebra_fixture() -> None:
             before = runs[0]
             mc.merge(step["merge"])
             fired = runs[0] > before
-            assert mc.get() == step["expected"]["value"], policy.name
-            assert fired == step["expected"]["invalidates"], policy.name
+            expected = step["expected"]
+            assert_key(expected, "value", mc.get(), where=policy.name)
+            assert_key(expected, "invalidates", fired, where=policy.name)
         seen += 1
     assert seen == 3

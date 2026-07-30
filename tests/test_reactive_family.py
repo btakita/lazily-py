@@ -19,7 +19,7 @@ import json
 from pathlib import Path
 
 import pytest
-from conformance_assert import instrument
+from conformance_assert import assert_key_with, excuse_key, instrument
 
 from lazily import ComputedMap, DisposedError, EntryKind, SourceMap
 
@@ -211,12 +211,29 @@ def _val_lookup(spec_val: dict) -> dict[str, int]:
     return {k: int(v) for k, v in spec_val.items()}
 
 
+def _excuse_default_mode(expected: dict) -> None:
+    """``default_mode`` selects a code path here; there is no value to compare.
+
+    The corpus names the default materialization strategy, but lazily-py's
+    ``ReactiveMap`` carries no mode flag — eager vs lazy is which call the caller
+    makes (``materialize_all`` vs ``get_or_insert_with``). Both paths ARE checked,
+    by ``eager_present`` / ``lazy_present_at_build`` / ``lazy_present_after_reads``
+    below; comparing this key against the string literal ``"eager"`` only asserted
+    that the fixture equals itself (#lzconsumednotasserted).
+    """
+    excuse_key(
+        expected,
+        "default_mode",
+        "no mode flag in lazily-py's ReactiveMap; the eager and lazy paths are "
+        "asserted directly via eager_present / lazy_present_* in this module",
+    )
+
+
 def _check_val_fixture(name: str) -> dict:
     fixture = load_fixture(name)
     assert fixture["kind"] in _COMPUTED_MAP_MODELS
     expected = fixture["expected"]
-    # default_mode_eager: eager is the default materialization strategy.
-    assert expected["default_mode"] == "eager"
+    _excuse_default_mode(expected)
 
     vals = _val_lookup(fixture["spec"]["val"])
     keys = list(vals.keys())
@@ -229,14 +246,19 @@ def _check_val_fixture(name: str) -> dict:
 
     # eager_materializes_all
     assert eager.present_count() == len(keys)
-    assert set(eager.present_keys()) == set(expected["eager_present"])
+    assert_key_with(
+        expected, "eager_present", lambda want: set(eager.present_keys()) == set(want)
+    )
     # lazy defers every derived slot: nothing present at build.
     assert lazy.present_count() == 0
 
     # observe_canonical / eager_lazy_observationally_equivalent
-    for k, want in expected["observe"].items():
-        assert eager.get(k) == want
-        assert lazy.get_or_insert_with(k, lookup) == want
+    def _observe(want: dict[str, int]) -> None:
+        for k, value in want.items():
+            assert eager.get(k) == value
+            assert lazy.get_or_insert_with(k, lookup) == value
+
+    assert_key_with(expected, "observe", _observe)
 
     return fixture
 
@@ -249,7 +271,11 @@ def test_conformance_observational_transparency() -> None:
     lazy: ComputedMap[str, int] = ComputedMap({})
     for k in fixture["reads"]:
         lazy.get_or_insert_with(k, _ctx_factory(vals.__getitem__))
-    assert set(lazy.present_keys()) == set(expected["lazy_present_after_reads"])
+    assert_key_with(
+        expected,
+        "lazy_present_after_reads",
+        lambda want: set(lazy.present_keys()) == set(want),
+    )
 
 
 def test_conformance_deferral_not_deallocation() -> None:
@@ -263,17 +289,23 @@ def test_conformance_deferral_not_deallocation() -> None:
     for k in fixture["reads"]:
         lazy.get_or_insert_with(k, _ctx_factory(vals.__getitem__))
         got_sizes.append(lazy.present_count())
-    assert got_sizes == expected["present_after_each_read"]
+    assert_key_with(expected, "present_after_each_read", lambda want: got_sizes == want)
 
     lazy_present = set(lazy.present_keys())
-    assert lazy_present == set(expected["lazy_present_after_reads"])
-    assert lazy_present.issubset(set(expected["eager_present"]))
+    assert_key_with(
+        expected,
+        "lazy_present_after_reads",
+        lambda want: lazy_present == set(want),
+    )
+    assert_key_with(
+        expected, "eager_present", lambda want: lazy_present.issubset(set(want))
+    )
 
 
 def test_conformance_entry_kind_orthogonal_to_mode() -> None:
     fixture = load_fixture("entry_kind_orthogonal_to_mode.json")
     expected = fixture["expected"]
-    assert expected["default_mode"] == "eager"
+    _excuse_default_mode(expected)
 
     entries = fixture["spec"]["entries"]
     cell_keys = [k for k, e in entries.items() if entry_kind_of(e) is EntryKind.SOURCE]
@@ -297,14 +329,18 @@ def test_conformance_entry_kind_orthogonal_to_mode() -> None:
     assert eager_cells.entry_kind is EntryKind.SOURCE
     assert eager_slots.entry_kind is EntryKind.COMPUTED
     eager_present = set(eager_cells.present_keys()) | set(eager_slots.present_keys())
-    assert eager_present == set(expected["eager_present"])
+    assert_key_with(expected, "eager_present", lambda want: eager_present == set(want))
 
     # Lazy build: cells present at build (always materialized), slots deferred.
     lazy_cells: SourceMap[str, int] = SourceMap({})
     for k in cell_keys:
         lazy_cells.entry(k, lookup(k))
     lazy_slots: ComputedMap[str, int] = ComputedMap({})
-    assert set(lazy_cells.present_keys()) == set(expected["lazy_present_at_build"])
+    assert_key_with(
+        expected,
+        "lazy_present_at_build",
+        lambda want: set(lazy_cells.present_keys()) == set(want),
+    )
     assert lazy_slots.present_keys() == []
 
     for k in fixture["reads"]:
@@ -313,16 +349,21 @@ def test_conformance_entry_kind_orthogonal_to_mode() -> None:
         else:
             lazy_cells.get_or_insert_with(k, _ctx_factory(lookup))
     lazy_after = set(lazy_cells.present_keys()) | set(lazy_slots.present_keys())
-    assert lazy_after == set(expected["lazy_present_after_reads"])
+    assert_key_with(
+        expected, "lazy_present_after_reads", lambda want: lazy_after == set(want)
+    )
 
     # Observational transparency across kinds.
-    for k, want in expected["observe"].items():
-        if k in cell_keys:
-            assert eager_cells.get(k) == want
-            assert lazy_cells.get(k) == want
-        else:
-            assert eager_slots.get(k) == want
-            assert lazy_slots.get_or_insert_with(k, _ctx_factory(lookup)) == want
+    def _observe(want: dict[str, int]) -> None:
+        for k, value in want.items():
+            if k in cell_keys:
+                assert eager_cells.get(k) == value
+                assert lazy_cells.get(k) == value
+            else:
+                assert eager_slots.get(k) == value
+                assert lazy_slots.get_or_insert_with(k, _ctx_factory(lookup)) == value
+
+    assert_key_with(expected, "observe", _observe)
 
 
 @pytest.mark.parametrize(
@@ -337,7 +378,7 @@ def test_fixture_loads_and_is_computed_map(name: str) -> None:
     fixture = load_fixture(name)
     assert fixture["kind"] in _COMPUTED_MAP_MODELS
     assert fixture["model"] in _COMPUTED_MAP_MODELS
-    assert fixture["expected"]["default_mode"] == "eager"
+    _excuse_default_mode(fixture["expected"])
 
 
 # ---------------------------------------------------------------------------

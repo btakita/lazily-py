@@ -18,11 +18,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-from conformance_assert import instrument
+from conformance_assert import assert_invalidates, assert_key, instrument
 
 from lazily import Slot
 from lazily.resilience import (
-    BreakerState,
     BulkheadCell,
     CircuitBreakerCell,
     RetryPolicyCell,
@@ -51,19 +50,11 @@ def _observer(ctx: dict, reader: Any) -> Slot:  # type: ignore[type-arg]
     return s
 
 
-def _assert_inval(ctx: dict, obs: Slot, invalidates: dict, name: str) -> None:  # type: ignore[type-arg]
-    """Assert the invalidation for one reader, then re-materialize for the next
-    step. A reader absent from ``invalidates`` is not asserted."""
-    if name in invalidates:
-        cached = obs.is_in(ctx)
-        if invalidates[name]:
-            assert not cached, (
-                f"reader `{name}` should have been invalidated but stayed cached"
-            )
-        else:
-            assert cached, (
-                f"reader `{name}` should have stayed cached but was invalidated"
-            )
+def _assert_inval(ctx: dict, obs: Slot, expected: dict, name: str, step: int) -> None:  # type: ignore[type-arg]
+    """Assert the fixture's invalidation map for one reader, then re-materialize
+    the observer for the next step."""
+    cached = obs.is_in(ctx)
+    assert_invalidates(expected, {name: not cached}, where=f"step {step}")
     obs(ctx)  # re-materialize
 
 
@@ -79,7 +70,6 @@ def _run_circuit_breaker() -> None:
     for i, step in enumerate(fx["steps"]):
         op = step["op"]
         expected = step["expected"]
-        invalidates = expected.get("invalidates", {})
         if op["type"] == "record":
             cb.record(op["success"], op["now"])
         elif op["type"] == "allow":
@@ -88,11 +78,8 @@ def _run_circuit_breaker() -> None:
         else:
             raise AssertionError(f"unknown circuit_breaker op: {op['type']}")
 
-        want_state = BreakerState(expected["state"])
-        assert cb.state() == want_state, (
-            f"step {i}: state {cb.state()} want {want_state}"
-        )
-        _assert_inval(ctx, obs, invalidates, "state")
+        assert_key(expected, "state", cb.state().value, where=f"step {i}")
+        _assert_inval(ctx, obs, expected, "state", i)
 
 
 def _run_retry() -> None:
@@ -105,12 +92,11 @@ def _run_retry() -> None:
     for i, step in enumerate(fx["steps"]):
         op = step["op"]
         expected = step["expected"]
-        invalidates = expected.get("invalidates", {})
         assert op["type"] == "next", f"unknown retry op: {op['type']}"
         got = r.next_delay()
         assert got == step["returns"], f"step {i}: next returns {got!r}"
-        assert r.delay() == expected["delay"], f"step {i}: delay mismatch"
-        _assert_inval(ctx, obs, invalidates, "delay")
+        assert_key(expected, "delay", r.delay(), where=f"step {i}")
+        _assert_inval(ctx, obs, expected, "delay", i)
 
 
 def _run_bulkhead() -> None:
@@ -122,7 +108,6 @@ def _run_bulkhead() -> None:
     for i, step in enumerate(fx["steps"]):
         op = step["op"]
         expected = step["expected"]
-        invalidates = expected.get("invalidates", {})
         if op["type"] == "acquire":
             got = b.acquire()
             assert got == step["returns"], f"step {i}: acquire returns {got!r}"
@@ -131,8 +116,8 @@ def _run_bulkhead() -> None:
         else:
             raise AssertionError(f"unknown bulkhead op: {op['type']}")
 
-        assert b.permits_in_use() == expected["in_use"], f"step {i}: in_use mismatch"
-        _assert_inval(ctx, obs, invalidates, "in_use")
+        assert_key(expected, "in_use", b.permits_in_use(), where=f"step {i}")
+        _assert_inval(ctx, obs, expected, "in_use", i)
 
 
 def _run_timeout() -> None:
@@ -144,7 +129,6 @@ def _run_timeout() -> None:
     for i, step in enumerate(fx["steps"]):
         op = step["op"]
         expected = step["expected"]
-        invalidates = expected.get("invalidates", {})
         now = op["now"]
         if op["type"] == "arm":
             t.arm(now, op["timeout"])
@@ -155,10 +139,8 @@ def _run_timeout() -> None:
             raise AssertionError(f"unknown timeout op: {op['type']}")
 
         assert got == step["returns"], f"step {i}: edge {got!r}"
-        assert t.is_timed_out() == expected["is_timed_out"], (
-            f"step {i}: is_timed_out mismatch"
-        )
-        _assert_inval(ctx, obs, invalidates, "is_timed_out")
+        assert_key(expected, "is_timed_out", t.is_timed_out(), where=f"step {i}")
+        _assert_inval(ctx, obs, expected, "is_timed_out", i)
 
 
 def test_resilience_conformance() -> None:

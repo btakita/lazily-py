@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from conformance_assert import instrument
+from conformance_assert import assert_key, instrument
 
 from lazily import CrdtTree, TextCrdt
 
@@ -53,10 +53,13 @@ def test_merge_algebra_is_order_and_duplication_independent() -> None:
 
     expect = scenario["expect"]
     assert isinstance(results[0], CrdtTree)
-    assert (len({result.text() for result in results}) == 1) is expect["texts_equal"]
-    assert (
-        len({tuple(sorted(result.version_vector().items())) for result in results}) == 1
-    ) is expect["version_vectors_equal"]
+    assert_key(expect, "texts_equal", len({result.text() for result in results}) == 1)
+    assert_key(
+        expect,
+        "version_vectors_equal",
+        len({tuple(sorted(result.version_vector().items())) for result in results})
+        == 1,
+    )
     assert all(result.value() == result.text() for result in results)
 
 
@@ -67,12 +70,12 @@ def test_empty_frontier_snapshot_preserves_lineage() -> None:
 
     expect = scenario["expect"]
     assert restored.apply_delta(source.delta_since({}))
-    assert (restored.text() == source.text()) is expect["restored_text_equal"]
+    assert_key(expect, "restored_text_equal", restored.text() == source.text())
     source_ids = {(item.id.counter, item.id.peer) for item in source.elements()}
     restored_ids = {(item.id.counter, item.id.peer) for item in restored.elements()}
     # Lineage, not just text: a snapshot that re-minted op ids would round-trip
     # the same characters and still break every later merge.
-    assert (restored_ids == source_ids) is expect["op_ids_equal"]
+    assert_key(expect, "op_ids_equal", restored_ids == source_ids)
 
     assert scenario["then_concurrent_edit"]
     source.insert(len(source), "a")
@@ -81,12 +84,13 @@ def test_empty_frontier_snapshot_preserves_lineage() -> None:
     restored.merge_from(source)
     assert source.text() == restored.text()
     ids = [(item.id.counter, item.id.peer) for item in source.elements()]
-    assert len(ids) - len(set(ids)) == expect["later_merge_duplicates"]
+    assert_key(expect, "later_merge_duplicates", len(ids) - len(set(ids)))
 
 
 def test_own_frontier_emits_empty_delta() -> None:
     scenario = _scenario("own frontier emits an empty delta")
     tree = TextCrdt.seed(scenario["seed"]["peer"], scenario["seed"]["text"])
     delta = tree.delta_since(tree.version_vector())
-    assert delta == scenario["expect"]["delta"]
-    assert tree.apply_delta(delta) is scenario["expect"]["apply_changed"]
+    expect = scenario["expect"]
+    assert_key(expect, "delta", delta)
+    assert_key(expect, "apply_changed", tree.apply_delta(delta))
