@@ -598,23 +598,34 @@ notes on CPython's per-node overhead.
 
 ## The lazily family
 
-`lazily-py` is one binding in a cross-language reactive family that shares the
-`lazily-spec` wire protocol:
+`lazily-py` is one binding in a cross-language reactive family — the same cell
+kernel, the same keyed collections and CRDTs, and the same `lazily-spec` wire
+protocol — so peers written in different languages talk to each other without a
+translation layer.
 
-| Binding | Language | Package |
-|---------|----------|---------|
-| [`lazily-rs`](https://github.com/lazily-hub/lazily-rs) | Rust | `lazily` (crates.io) |
-| **`lazily-py`** | Python | `lazily` (PyPI) |
-| [`lazily-zig`](https://github.com/lazily-hub/lazily-zig) | Zig | GitHub |
-| [`@lazily/signaling`](https://github.com/lazily-hub/lazily-js) | TypeScript / Cloudflare Worker | npm |
-| [`lazily-spec`](https://github.com/lazily-hub/lazily-spec) | — | wire protocol + conformance fixtures |
-| [`lazily-formal`](https://github.com/lazily-hub/lazily-formal) | — | Lean 4 formal model (FSM kernel + Harel state chart) |
+| Repo | Language |
+|---------|----------|
+| [`lazily-rs`](https://github.com/lazily-hub/lazily-rs) | Rust — the reference implementation |
+| **`lazily-py`** | Python — you are here |
+| [`lazily-go`](https://github.com/lazily-hub/lazily-go) | Go |
+| [`lazily-kt`](https://github.com/lazily-hub/lazily-kt) | Kotlin / JVM |
+| [`lazily-js`](https://github.com/lazily-hub/lazily-js) | JavaScript / TypeScript |
+| [`lazily-cs`](https://github.com/lazily-hub/lazily-cs) | C# / .NET |
+| [`lazily-cpp`](https://github.com/lazily-hub/lazily-cpp) | C++ |
+| [`lazily-zig`](https://github.com/lazily-hub/lazily-zig) | Zig |
+| [`lazily-dart`](https://github.com/lazily-hub/lazily-dart) | Dart / Flutter |
+| [`lazily-react`](https://github.com/lazily-hub/lazily-react) | React / Preact bindings layered over `lazily-js` (not a separate language binding) |
 
 See [`lazily-spec`](https://github.com/lazily-hub/lazily-spec) for the canonical
 Snapshot/Delta schemas, the IPC Lean proofs of the epoch/memo/batch invariants,
 and the conformance fixtures every IPC-capable binding validates against. The
 language-agnostic formal model — the flat FSM kernel and the full Harel state
 chart — lives in [`lazily-formal`](https://github.com/lazily-hub/lazily-formal).
+
+Per-binding parity, with per-cell notes and platform carve-outs, lives in
+[`lazily-spec` § Cross-Language Coverage](https://github.com/lazily-hub/lazily-spec/blob/main/docs/coverage.md)
+— it is generated from `coverage.json`, so it does not rot the way a hand-copied
+table would.
 
 ## Development
 
