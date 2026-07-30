@@ -97,6 +97,25 @@ def pytest_sessionfinish(session, exitstatus) -> None:  # type: ignore[no-untype
 
     report: list[str] = []
 
+    # Every rung below reasons about fixtures this run OPENED: no opened fixture
+    # means no ledger, no unconsumed key, no unreplayed scenario — three guards
+    # reporting green over an empty corpus. That is correct on a local checkout
+    # without the lazily-spec sibling (the suites skip by design) and is the
+    # vacuous green on CI, where the run is the proof. So on CI, opening zero
+    # canonical fixtures is itself the failure.
+    vacuous = bool(os.environ.get("CI")) and not _opened
+    if vacuous:
+        report += [
+            "",
+            "CONFORMANCE RUN WAS VACUOUS (#lzguardsnotinci)",
+            "  This run opened ZERO fixtures from the canonical corpus, so the",
+            "  assertion-key and scenario-replay guards below had nothing to check and",
+            "  would have reported green. Either the lazily-spec sibling is missing or",
+            "  every conformance runner skipped. Clone the corpus, or point",
+            "  LAZILY_SPEC_CONFORMANCE_DIR at a copy.",
+            "",
+        ]
+
     failures = consumption_failures()
     if failures:
         report += [
@@ -144,5 +163,5 @@ def pytest_sessionfinish(session, exitstatus) -> None:  # type: ignore[no-untype
 
     if report:
         sys.stderr.write("\n".join(report) + "\n")
-    if (failures or scenario_bad) and exitstatus == 0:
+    if (failures or scenario_bad or vacuous) and exitstatus == 0:
         session.exitstatus = 1

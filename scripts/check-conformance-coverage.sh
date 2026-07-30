@@ -19,6 +19,17 @@ set -euo pipefail
 
 SPEC_DIR="${LAZILY_SPEC_CONFORMANCE_DIR:-../lazily-spec/conformance}"
 if [ ! -d "$SPEC_DIR" ]; then
+  # Skipping is right for a local checkout without the sibling clone, and wrong
+  # everywhere the run is supposed to PROVE something. On CI (or with
+  # LAZILY_CONFORMANCE_REQUIRE_CORPUS=1) an absent corpus is the vacuous green
+  # this whole ladder exists to reject: nothing was compared, and a skip that
+  # exits 0 reports that as success.
+  if [ -n "${CI:-}" ] || [ -n "${LAZILY_CONFORMANCE_REQUIRE_CORPUS:-}" ]; then
+    echo "::error::canonical corpus not found at $SPEC_DIR — the coverage guard would" >&2
+    echo "         compare against nothing and pass vacuously. Clone lazily-spec as a" >&2
+    echo "         sibling, or point LAZILY_SPEC_CONFORMANCE_DIR at a copy." >&2
+    exit 1
+  fi
   echo "SKIP: canonical corpus not found at $SPEC_DIR (clone the lazily-spec sibling)" >&2
   exit 0
 fi

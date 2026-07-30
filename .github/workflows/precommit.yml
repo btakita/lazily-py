@@ -42,5 +42,14 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
+      # All four conformance guards run from this one step (#lzguardsnotinci):
+      #   rung 1  runtime fixture manifest / coverage   poe conformance_coverage
+      #   rung 2  unconsumed assertion key              pytest_sessionfinish
+      #   rung 3  read-but-unasserted assertion key     pytest_sessionfinish
+      #   rung 4  unreplayed fixture scenario           pytest_sessionfinish
+      # Rung 1 previously ran only from `make check` on a developer's machine, so
+      # CI could not have caught a fixture the suite stopped opening. Keep the
+      # ladder wired to `poe precommit` — a guard invoked from the Makefile alone
+      # is a guard this workflow does not run.
       - name: Run poe precommit
         run: uv run poe precommit

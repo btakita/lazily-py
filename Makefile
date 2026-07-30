@@ -21,9 +21,14 @@ init:
 	fi
 
 # Run tests
+#
+# Delegates to the poe tasks rather than repeating the manifest env var and the
+# truncation here. CI runs `poe precommit`, so any setup that lives only in this
+# file is setup CI does not do — which is how the coverage guard came to run
+# nowhere but a developer's machine (#lzguardsnotinci).
 test:
-	@mkdir -p build && : > build/conformance-fixtures-loaded.txt
-	LAZILY_CONFORMANCE_MANIFEST=build/conformance-fixtures-loaded.txt uv run pytest tests/ -v
+	uv run poe conformance_manifest
+	uv run poe test
 
 # Compile the reactive core with mypyc (in-place .so files). Idempotent —
 # rebuild after editing src/lazily/{slot,cell,signal,effect,batch}.py to run
@@ -91,4 +96,4 @@ publish: build
 # canonical corpus grows a fixture no test in this repo even names. Naming is not
 # replaying — see the script header for what this does and does not prove.
 conformance-coverage:
-	./scripts/check-conformance-coverage.sh
+	uv run poe conformance_coverage

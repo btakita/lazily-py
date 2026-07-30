@@ -87,11 +87,44 @@ package = true
 
 [tool.poe.tasks]
 init = "uv sync --all-groups"
-precommit = ["ty", "ruff_fix", "run_readme", "test"]
+
+# The four conformance guards all run from here, because CI runs `poe precommit`
+# and nothing else (#lzguardsnotinci). Rungs 2-4 (unconsumed key, unasserted key,
+# unreplayed scenario) are wired into `tests/conftest.py:pytest_sessionfinish`, so
+# `test` carries them. Rung 1 (the runtime fixture manifest / coverage guard) is a
+# separate script and used to run only from `make check` on a developer's machine —
+# a guard nobody's CI executes is a guard that does not exist. `conformance_manifest`
+# truncates and exports the manifest the recorder appends to, exactly as the
+# Makefile did locally; `conformance_coverage` reads it back.
+precommit = [
+    "ty",
+    "ruff_fix",
+    "run_readme",
+    "conformance_manifest",
+    "test",
+    "conformance_coverage",
+]
 ruff_fix = "ruff check --fix"
 run_readme = "python -m tests.run_readme"
 ty = "ty check src"
-test = "pytest tests/ -v"
+
+# Truncate before the run. The recorder APPENDS (pytest-xdist and reruns each
+# contribute reads), so a manifest left over from an earlier invocation would
+# credit this run with fixtures it never opened — a stale green in the one file
+# the coverage guard treats as evidence.
+[tool.poe.tasks.conformance_manifest]
+shell = "mkdir -p build && : > build/conformance-fixtures-loaded.txt"
+
+[tool.poe.tasks.test]
+cmd = "pytest tests/ -v"
+# Set here rather than only in the Makefile so `poe test`, `make test` and CI all
+# attach the recorder. Without it the suite still runs and still enforces rungs
+# 2-4, but writes no manifest, and rung 1 has no evidence to read.
+env = { LAZILY_CONFORMANCE_MANIFEST = "build/conformance-fixtures-loaded.txt" }
+
+[tool.poe.tasks.conformance_coverage]
+cmd = "./scripts/check-conformance-coverage.sh"
+env = { LAZILY_CONFORMANCE_MANIFEST = "build/conformance-fixtures-loaded.txt" }
 
 [tool.ruff]
 target-version = "py312"
