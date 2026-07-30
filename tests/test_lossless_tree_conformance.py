@@ -18,7 +18,7 @@ import json
 from pathlib import Path
 
 import pytest
-from conformance_assert import assert_key, assert_key_with, instrument
+from conformance_assert import assert_key, assert_key_with, instrument, scenarios
 
 from lazily.lossless_tree_crdt import (
     LEAF_KIND_FROM_WIRE,
@@ -165,7 +165,7 @@ def _assert_expect(world: _World, expect: dict, label: str) -> None:
 
 def _run_fixture(name: str) -> None:
     fixture = _fixture(name)
-    for i, scenario in enumerate(fixture["scenarios"]):
+    for i, scenario in enumerate(scenarios(fixture)):
         label = f"{name}[{scenario.get('name', i)}]"
         world = _World()
         world.replicas["a"] = LosslessTreeCrdt(scenario["seed"]["peer"])

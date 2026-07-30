@@ -20,7 +20,14 @@ import json
 from pathlib import Path
 
 import pytest
-from conformance_assert import assert_key, assert_key_with, instrument
+from conformance_assert import (
+    assert_key,
+    assert_key_with,
+    instrument,
+)
+from conformance_assert import (
+    scenarios as replay_scenarios,
+)
 
 from lazily.command import (
     CallStateKind,
@@ -141,7 +148,7 @@ def _run_fixture(name: str) -> None:
     # `scenarios` list where each scenario has its own `frames` and `expect`.
     scenarios = fixture.get("scenarios")
     if scenarios:
-        for sc in scenarios:
+        for sc in replay_scenarios(fixture):
             proj = CommandProjection()
             _run_frames_expect(proj, sc["frames"], sc["expect"])
     else:

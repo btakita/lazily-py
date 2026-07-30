@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from conformance_assert import assert_key, assert_key_with, instrument
+from conformance_assert import assert_key, assert_key_with, instrument, scenarios
 
 from lazily import (
     CrdtOp,
@@ -50,7 +50,7 @@ def _load(rel: str) -> dict:
 def test_stableid_alignment_conformance() -> None:
     fix = _load("collections/stableid_alignment.json")
     assert fix["model"] == "StableId"
-    for sc in fix["scenarios"]:
+    for sc in scenarios(fix):
         name = sc["name"]
         expect = sc["expect"]
         if "blocks" in sc:
@@ -104,7 +104,7 @@ def test_stableid_alignment_conformance() -> None:
 def test_semtree_conformance() -> None:
     fix = _load("collections/semtree_incremental.json")
     assert fix["model"] == "SemTree"
-    for sc in fix["scenarios"]:
+    for sc in scenarios(fix):
         tree: SemTree[str, int] = SemTree.from_json(sc["tree"], fold=sc["fold"])  # type: ignore[arg-type]
         expect_initial = sc["expect_initial"]
         for node_id in list(expect_initial):
@@ -230,7 +230,7 @@ class _Replicas:
 def test_textcrdt_convergence_conformance() -> None:
     fix = _load("collections/textcrdt_convergence.json")
     assert fix["model"] == "TextCrdt"
-    for sc in fix["scenarios"]:
+    for sc in scenarios(fix):
         interp = _Replicas()
         seed = sc.get("seed") or sc.get("replica")
         if seed is not None:
@@ -280,7 +280,7 @@ def test_textcrdt_convergence_conformance() -> None:
 def test_textcrdt_delta_sync_conformance() -> None:
     fix = _load("collections/textcrdt_delta_sync.json")
     assert fix["model"] == "TextCrdt"
-    for sc in fix["scenarios"]:
+    for sc in scenarios(fix):
         interp = _Replicas()
         seed = sc["seed"]
         interp.r["a"] = TextCrdt.seed(seed["peer"], seed["text"])
@@ -403,7 +403,7 @@ class _SeqReplicas:
 def test_seqcrdt_convergence_conformance() -> None:
     fix = _load("collections/seqcrdt_convergence.json")
     assert fix["model"] == "SeqCrdt"
-    for sc in fix["scenarios"]:
+    for sc in scenarios(fix):
         interp = _SeqReplicas()
         if "replica" in sc:
             interp.r["a"] = SeqCrdt(sc["replica"]["peer"])
@@ -507,7 +507,7 @@ def _mk_crdtop(d: dict) -> CrdtOp:
 def test_crdt_plane_anti_entropy_conformance() -> None:
     fix = _load("distributed/anti_entropy_converge.json")
     assert fix["model"] == "CrdtPlane"
-    for sc in fix["scenarios"]:
+    for sc in scenarios(fix):
         expect = sc["expect"]
         name = sc["name"]
         plane = CrdtPlaneRuntime()

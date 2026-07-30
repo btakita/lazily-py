@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from conformance_assert import assert_key, assert_key_with, instrument
+from conformance_assert import assert_key, assert_key_with, instrument, scenarios
 
 from lazily import CrdtPlaneRuntime, CrdtSync
 
@@ -42,7 +42,7 @@ def test_family_sync_materialize_on_ingest() -> None:
     namespace = fixture["namespace"]
     assert fixture["value_type"] == "bool", "this harness replays the bool value_type"
 
-    for scenario in fixture["scenarios"]:
+    for scenario in scenarios(fixture):
         name = scenario["name"]
 
         origin = CrdtPlaneRuntime(scenario["origin_peer"])

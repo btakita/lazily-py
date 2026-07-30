@@ -70,7 +70,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conformance_assert import assert_key_with, instrument
+from conformance_assert import (
+    assert_key_with,
+    instrument,
+)
+from conformance_assert import (
+    scenarios as replay_scenarios,
+)
 
 from lazily import (
     Cell,
@@ -1069,7 +1075,7 @@ async def _run_fixture(
     expected = fixture.get("expected")
     return [
         await _replay(model_cls(), name, scenario["steps"], expected)
-        for scenario in fixture["scenarios"]
+        for scenario in replay_scenarios(fixture)
     ]
 
 

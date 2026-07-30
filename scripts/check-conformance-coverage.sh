@@ -26,6 +26,14 @@ fi
 # Fixtures deliberately not covered by this binding yet. Each entry is a claim that
 # someone looked; shrinking this list is the work. Adding to it silently is how the
 # guard rots, so keep a reason with any new entry.
+#
+# This list is half of what lazily-py does not prove. The other half is
+# SCENARIO_EXCUSES in tests/conformance_assert.py (#lzscenariocoverage): this list
+# names whole fixtures this binding never opens, that one names scenarios inside a
+# fixture it DOES open, which this guard cannot see because opening a fixture for
+# one scenario satisfies it. Read the two together, and keep them disjoint — a
+# fixture named here is already excused a level up and must not also carry scenario
+# excuses.
 KNOWN_UNCOVERED=(
   "agent-doc/delta_agent_doc_state.json"
   "agent-doc/snapshot_agent_doc_state.json"

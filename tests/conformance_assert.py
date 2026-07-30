@@ -63,25 +63,74 @@ A few canonical fixtures carry human-readable narration inside an assertion bloc
 visible next to the runner that takes it, rather than buried in a global
 allowlist. Prose is exempt from all three verdicts. Everything else must be
 consumed *and* asserted (or excused) or the guard fails.
+
+Scenario was never replayed (#lzscenariocoverage)
+-------------------------------------------------
+The rungs above all reason about the scenarios a runner *reached*. A fixture that
+carries several named scenarios can be PARTIALLY replayed and none of them
+notices: the coverage guard only asks whether the file was opened (one scenario is
+enough), and the key trackers only bind blocks a runner actually walks, so a
+scenario nobody enters contributes no unconsumed key and no unasserted key. It is
+invisible by construction.
+
+So there is a fourth ledger here, recording which scenario ids the run really
+replayed. Its shape mirrors the runtime fixture manifest deliberately: a
+hand-authored list of "scenarios this binding covers" is a claim, and a claim
+rots.
+
+The recording happens at the point of replay, and *yielding is not replaying*: a
+generator cannot tell a loop body that ran from one that ``continue``d past the
+scenario, so booking at the yield would call a skipped scenario covered — the very
+defect. :func:`scenarios` therefore hands out a view that books on the first read
+of the scenario's PAYLOAD (``steps``, ``ops``, ``frames``, ``expect``, …) and
+stays silent for :data:`SCENARIO_LABEL_KEYS` (``id``, ``name``, …), which is what
+a skip reads on its way past. Runners that pick a scenario out by name wrap it the
+same way through :func:`scenario_view`.
+
+Ids resolve in one fixed order shared by every binding: ``id``, else ``name``,
+else the positional index spelled ``#<n>``. The corpus is not uniform —
+``collections/mergecell_algebra.json`` carries no identifier at all — so any
+scenario that lands on the positional fallback is *reported* by the guard rather
+than silently accepted. The report is what makes the corpus gap fixable upstream;
+adding the identifiers is a shared-corpus change and does not belong here.
+
+Verification runs in both directions at session end, like ``KNOWN_UNCOVERED`` and
+like :func:`excuse_key`: a scenario on disk that the run never replayed fails
+unless :func:`excuse_scenario` names it with a reason; an excuse for a scenario the
+same run DID replay fails as stale; and an excuse naming an id the fixture does not
+carry fails as rotted.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping
+import json
+import os
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from pathlib import Path
 from typing import Any
 
 
 __all__ = [
     "BLOCK_KEYS",
     "PROSE_KEYS",
+    "SCENARIO_EXCUSES",
+    "SCENARIO_LABEL_KEYS",
     "TrackedBlock",
     "assert_invalidates",
     "assert_key",
     "assert_key_with",
     "consumption_failures",
+    "corpus_dir",
     "excuse_key",
+    "excuse_scenario",
     "instrument",
+    "record_scenario",
+    "replayed_scenarios",
     "reset",
+    "scenario_failures",
+    "scenario_id",
+    "scenario_view",
+    "scenarios",
     "tracked",
 ]
 
@@ -387,7 +436,12 @@ def instrument(
             return items
         return node
 
-    return walk(fixture, "")
+    walked = walk(fixture, "")
+    if isinstance(walked, dict):
+        instrumented = _InstrumentedFixture(walked)
+        instrumented.conformance_name = name
+        return instrumented
+    return walked
 
 
 def reset(fixture: str | None = None) -> None:
@@ -399,9 +453,17 @@ def reset(fixture: str | None = None) -> None:
     """
     if fixture is None:
         _LEDGERS.clear()
+        _REPLAYED.clear()
+        _SCENARIO_EXCUSES.clear()
+        _seed_scenario_excuses()
         return
     for key in [key for key in _LEDGERS if key[0] == fixture]:
         del _LEDGERS[key]
+    _REPLAYED.pop(fixture, None)
+    _SCENARIO_EXCUSES.pop(fixture, None)
+    if fixture in SCENARIO_EXCUSES:
+        for scenario, reason in SCENARIO_EXCUSES[fixture].items():
+            excuse_scenario(fixture, scenario, reason)
 
 
 def consumption_failures() -> list[str]:
@@ -436,3 +498,310 @@ def consumption_failures() -> list[str]:
                 + "; ".join(ledger.excused[key] for key in stale)
             )
     return lines
+
+
+# ---------------------------------------------------------------------------
+# Rung 4: per-scenario replay accounting (#lzscenariocoverage)
+# ---------------------------------------------------------------------------
+
+#: The key under which the canonical corpus spells a fixture's scenario list.
+SCENARIOS_KEY = "scenarios"
+
+#: Scenarios this binding does not replay, with the reason it cannot.
+#:
+#: The companion of ``KNOWN_UNCOVERED`` in ``scripts/check-conformance-coverage.sh``
+#: — that list names whole fixtures this binding never opens, this one names
+#: scenarios inside a fixture it does open, so the two together are the single
+#: reading of what lazily-py does not prove. Keep them in sync: a fixture listed in
+#: ``KNOWN_UNCOVERED`` must NOT appear here (it is already excused a level up), and
+#: an entry here is a claim someone looked, exactly like an entry there.
+#:
+#: Prefer implementing the scenario. Both directions are enforced: an entry for a
+#: scenario the run DOES replay fails as stale, and an entry naming an id the
+#: fixture does not carry fails as rotted.
+SCENARIO_EXCUSES: dict[str, dict[str, str]] = {}
+
+
+class _InstrumentedFixture(dict):
+    """A loaded fixture that remembers its corpus-relative name.
+
+    :func:`instrument` already knows the name — every call site passes it — so
+    carrying it on the fixture lets :func:`scenarios` record against the right
+    fixture without every loop repeating the string. A ``dict`` subclass keeps
+    every existing access, ``isinstance`` check, and equality comparison intact.
+    """
+
+    conformance_name: str = ""
+
+
+#: fixture -> scenario ids this run actually replayed.
+_REPLAYED: dict[str, set[str]] = {}
+#: fixture -> {scenario id: reason}, seeded from ``SCENARIO_EXCUSES``.
+_SCENARIO_EXCUSES: dict[str, dict[str, str]] = {}
+
+
+def _seed_scenario_excuses() -> None:
+    for fixture, entries in SCENARIO_EXCUSES.items():
+        for scenario, reason in entries.items():
+            excuse_scenario(fixture, scenario, reason)
+
+
+def scenario_id(scenario: Any, index: int) -> str:
+    """Resolve a scenario's id: ``id``, else ``name``, else positional ``#<n>``.
+
+    One fixed order, identical in every binding. The positional fallback exists
+    because the corpus is not uniform — ``collections/mergecell_algebra.json``
+    distinguishes its scenarios only by ``policy`` — and every use of it is
+    reported by :func:`scenario_failures` so the gap stays visible instead of
+    quietly becoming the norm.
+    """
+    if isinstance(scenario, Mapping):
+        for key in ("id", "name"):
+            value = scenario.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return f"#{index}"
+
+
+def record_scenario(fixture: str, scenario: Any, index: int = 0) -> str:
+    """Book one scenario as replayed; return the id it was booked under.
+
+    ``scenario`` may be the scenario mapping (the id is resolved from it) or an
+    already-resolved id string, for the runners that look a scenario up by name.
+    """
+    if not fixture:
+        raise AssertionError(
+            "record_scenario needs the corpus-relative fixture path; an unnamed "
+            "fixture cannot be compared against the corpus on disk"
+        )
+    resolved = scenario if isinstance(scenario, str) else scenario_id(scenario, index)
+    _REPLAYED.setdefault(fixture, set()).add(resolved)
+    return resolved
+
+
+#: Keys that identify or narrate a scenario rather than drive one. Reading only
+#: these is *looking at the label*, not replaying — a loop body that reads
+#: ``scenario["id"]`` and ``continue``s past it has replayed nothing, and booking
+#: it there would let the skip this rung exists to catch hide behind the helper.
+SCENARIO_LABEL_KEYS = frozenset(
+    {"comment", "description", "id", "label", "name", "note", "notes", "reason", "why"}
+)
+
+
+class _ScenarioView(dict):
+    """One scenario, booked as replayed on the first read of its *payload*.
+
+    Yielding is not replaying. A generator cannot tell a loop body that ran from
+    one that ``continue``d — both just come back for the next item — so booking at
+    the yield would call a skipped scenario covered, which is precisely the defect
+    (#lzscenariocoverage). Booking on payload access can tell them apart: the
+    steps/ops/frames/expect of a scenario are only read by a runner that is about
+    to replay it, while ``id`` and ``name`` are what a skip reads on its way past.
+
+    A ``dict`` subclass rather than a ``Mapping`` wrapper so every runner keeps
+    its ``dict`` annotations and its existing access patterns.
+    """
+
+    def __init__(self, data: Mapping[str, Any], *, fixture: str, ident: str) -> None:
+        super().__init__(data)
+        self._fixture = fixture
+        self._ident = ident
+
+    def _touch(self, key: object) -> None:
+        if key not in SCENARIO_LABEL_KEYS:
+            record_scenario(self._fixture, self._ident)
+
+    def __getitem__(self, key: str) -> Any:
+        self._touch(key)
+        return super().__getitem__(key)
+
+    def get(self, key: str, default: Any = None) -> Any:  # type: ignore[override]
+        self._touch(key)
+        return super().get(key, default)
+
+    def __iter__(self) -> Iterator[str]:
+        record_scenario(self._fixture, self._ident)
+        return super().__iter__()
+
+    def keys(self):  # type: ignore[override]
+        record_scenario(self._fixture, self._ident)
+        return super().keys()
+
+    def items(self):  # type: ignore[override]
+        record_scenario(self._fixture, self._ident)
+        return super().items()
+
+    def values(self):  # type: ignore[override]
+        record_scenario(self._fixture, self._ident)
+        return super().values()
+
+
+def scenario_view(fixture: str, scenario: Mapping[str, Any], index: int = 0) -> Any:
+    """Wrap one scenario so reading its payload books it as replayed.
+
+    For the runners that pick a scenario out by name rather than iterating. The
+    lookup itself must not book: ``next(s for s in ... if s["name"] == wanted)``
+    walks past every scenario ahead of the match, and a scenario handed back but
+    never used is not replayed either.
+    """
+    return _ScenarioView(scenario, fixture=fixture, ident=scenario_id(scenario, index))
+
+
+def scenarios(
+    fixture: Mapping[str, Any],
+    name: str | None = None,
+    *,
+    key: str = SCENARIOS_KEY,
+) -> Iterator[Any]:
+    """Iterate a fixture's scenarios, booking each as its payload is read.
+
+    This is the shared iteration helper the contract asks for — a runner converted
+    to::
+
+        for scenario in scenarios(fixture):
+            ...
+
+    cannot forget to book what it replayed, because the booking rides on the
+    scenario the loop is handed rather than on a call the loop has to remember.
+    And a runner that stops entering a scenario stops booking it, which is the
+    whole point: a declaration would keep claiming coverage the run no longer has.
+
+    ``name`` defaults to the corpus-relative name :func:`instrument` recorded on
+    the fixture.
+    """
+    resolved_name = name or getattr(fixture, "conformance_name", "")
+    if not resolved_name:
+        raise AssertionError(
+            "scenarios() needs the corpus-relative fixture path; load the fixture "
+            "through instrument(name=...) or pass `name` explicitly"
+        )
+    for index, scenario in enumerate(fixture[key]):
+        yield scenario_view(resolved_name, scenario, index)
+
+
+def excuse_scenario(fixture: str, scenario: str, reason: str) -> None:
+    """Declare that this binding cannot replay ``scenario``, and say why.
+
+    Both directions, like ``KNOWN_UNCOVERED`` and like :func:`excuse_key`: the
+    excuse satisfies the scenario, an excuse for a scenario the same run replays
+    fails as stale, and an excuse naming an id the fixture does not carry fails as
+    rotted. Prefer implementing the scenario — a known-skipped scenario is exactly
+    the work this rung exists to force.
+    """
+    if not reason or not reason.strip():
+        raise AssertionError(
+            f"{fixture}: excuse_scenario({scenario!r}) needs a non-empty reason "
+            f"naming what this binding cannot express"
+        )
+    _SCENARIO_EXCUSES.setdefault(fixture, {})[scenario] = reason.strip()
+
+
+def replayed_scenarios() -> dict[str, set[str]]:
+    """The scenario ids this run really replayed, per fixture."""
+    return {fixture: set(ids) for fixture, ids in _REPLAYED.items()}
+
+
+def corpus_dir() -> Path:
+    """Locate the canonical corpus, honouring ``LAZILY_SPEC_CONFORMANCE_DIR``.
+
+    The same override ``scripts/check-conformance-coverage.sh`` reads, so a
+    scratch copy of the corpus (never edit the shared one in place — it is shared
+    by all nine bindings) moves both guards together.
+    """
+    override = os.environ.get("LAZILY_SPEC_CONFORMANCE_DIR")
+    if override:
+        return Path(override)
+    return Path(__file__).resolve().parents[2] / "lazily-spec" / "conformance"
+
+
+def _disk_scenarios(path: Path) -> tuple[list[str], list[str]] | None:
+    """``(ids, positional_ids)`` for a fixture on disk, or ``None`` if it has none."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    listed = raw.get(SCENARIOS_KEY)
+    if not isinstance(listed, list) or not listed:
+        return None
+    ids = [scenario_id(scenario, index) for index, scenario in enumerate(listed)]
+    positional = [name for name in ids if name.startswith("#")]
+    return ids, positional
+
+
+def scenario_failures(
+    opened: Iterable[str],
+    corpus: Path | None = None,
+) -> tuple[list[str], list[str]]:
+    """``(failures, notices)`` for per-scenario replay accounting.
+
+    ``opened`` is the runtime fixture manifest — the corpus-relative paths the
+    suite really read. Only those fixtures are checked: a fixture this binding
+    does not open at all is already the coverage guard's verdict, and reporting it
+    again here would just name the same gap twice under a weaker rung.
+
+    Notices are not failures. A scenario booked under the positional fallback is
+    reported so the missing identifier upstream stays visible.
+    """
+    root = corpus if corpus is not None else corpus_dir()
+    failures: list[str] = []
+    notices: list[str] = []
+
+    checked = sorted(set(opened) | set(_SCENARIO_EXCUSES))
+    for fixture in checked:
+        path = root / fixture
+        if not path.is_file():
+            if fixture in _SCENARIO_EXCUSES:
+                failures.append(
+                    f"{fixture}: excuse_scenario names a fixture that is not in the "
+                    f"canonical corpus; the excuse has rotted"
+                )
+            continue
+        found = _disk_scenarios(path)
+        excused = _SCENARIO_EXCUSES.get(fixture, {})
+        if found is None:
+            if excused:
+                failures.append(
+                    f"{fixture}: excuse_scenario({sorted(excused)}) names scenario(s) "
+                    f"in a fixture that carries no `scenarios` array; the excuse has "
+                    f"rotted"
+                )
+            continue
+        ids, positional = found
+        replayed = _REPLAYED.get(fixture, set())
+
+        rotted = sorted(set(excused) - set(ids))
+        if rotted:
+            failures.append(
+                f"{fixture}: excuse_scenario({rotted}) names scenario id(s) the "
+                f"fixture does not carry; the excuse has rotted. Ids on disk: {ids}"
+            )
+        stale = sorted(set(excused) & replayed)
+        if stale:
+            failures.append(
+                f"{fixture}: excuse_scenario({stale}) is stale — this run DID replay "
+                + ("that scenario" if len(stale) == 1 else "those scenarios")
+                + "; reason(s): "
+                + "; ".join(excused[name] for name in stale)
+            )
+        skipped = [name for name in ids if name not in replayed and name not in excused]
+        if skipped:
+            failures.append(
+                f"{fixture}: scenario(s) {skipped} are in the fixture but were never "
+                f"replayed by this suite. The fixture was opened, so the coverage "
+                f"guard is satisfied and the key guards never saw these blocks — "
+                f"replay them, or declare excuse_scenario(fixture, id, reason)"
+            )
+        if positional:
+            notices.append(
+                f"{fixture}: scenario(s) {positional} have neither `id` nor `name` "
+                f"and were booked by position. The ids are stable only as long as "
+                f"the fixture's order is; adding identifiers upstream is a "
+                f"lazily-spec change, not a lazily-py one"
+            )
+
+    return failures, notices
+
+
+_seed_scenario_excuses()

@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 from conformance_assert import instrument
+from conformance_assert import scenarios as replay_scenarios
 
 from lazily.stdlib import (
     MAX_U64,
@@ -134,7 +135,7 @@ def test_stdlib_canonical_corpus() -> None:
     for name in ("timer.json", "timeout.json", "revision_barrier.json"):
         fixture = load(name)
         scenarios = {scenario["id"] for scenario in fixture["scenarios"]}
-        for scenario in fixture["scenarios"]:
+        for scenario in replay_scenarios(fixture):
             runners[fixture["feature"]](scenario["steps"])
         for mutation in fixture["mutations"]:
             assert mutation["must_fail"]

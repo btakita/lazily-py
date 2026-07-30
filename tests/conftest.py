@@ -19,7 +19,7 @@ import os
 import sys
 from pathlib import Path
 
-from conformance_assert import consumption_failures
+from conformance_assert import consumption_failures, scenario_failures
 
 
 _MANIFEST = os.environ.get("LAZILY_CONFORMANCE_MANIFEST")
@@ -39,20 +39,27 @@ def _record(path: object) -> None:
     _opened.add(rel.replace(os.sep, "/"))
 
 
-if _MANIFEST:
-    _orig_read_text = Path.read_text
-    _orig_open = Path.open
+# Recording is unconditional; only the *write* is gated on the env var. The
+# per-scenario guard (#lzscenariocoverage) needs to know which fixtures were
+# opened in order to decide which ones to hold to scenario accounting, and gating
+# that on an env var would make a bare `pytest tests/` silently drop the fourth
+# rung — the same vacuous green the manifest exists to prevent.
+_orig_read_text = Path.read_text
+_orig_open = Path.open
 
-    def _read_text(self: Path, *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
-        _record(self)
-        return _orig_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
 
-    def _open(self: Path, *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
-        _record(self)
-        return _orig_open(self, *args, **kwargs)  # type: ignore[arg-type]
+def _read_text(self: Path, *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+    _record(self)
+    return _orig_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
 
-    Path.read_text = _read_text  # type: ignore[method-assign]
-    Path.open = _open  # type: ignore[method-assign]
+
+def _open(self: Path, *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+    _record(self)
+    return _orig_open(self, *args, **kwargs)  # type: ignore[arg-type]
+
+
+Path.read_text = _read_text  # type: ignore[method-assign]
+Path.open = _open  # type: ignore[method-assign]
 
 
 def _write_manifest() -> None:
@@ -69,7 +76,7 @@ def _write_manifest() -> None:
 
 
 def pytest_sessionfinish(session, exitstatus) -> None:  # type: ignore[no-untyped-def]
-    """Persist the read manifest, then fail on unconsumed assertion keys.
+    """Persist the read manifest, then fail on unconsumed keys and unreplayed scenarios.
 
     Consumption is a session-wide property (#lzassertunknownkeys): fixtures are
     routinely loaded by more than one test — a dedicated assertion test plus a
@@ -77,29 +84,65 @@ def pytest_sessionfinish(session, exitstatus) -> None:  # type: ignore[no-untype
     ANY runner checked the key, not whether each individual load did. So the
     verdict lands here rather than in a per-test teardown.
 
+    Per-scenario replay (#lzscenariocoverage) is session-wide for the same reason,
+    and lands here for one more: the comparison is between the ledger and the
+    fixture on disk, and only at the end of the run is the ledger complete. A
+    fixture's four scenarios are routinely replayed by four separate tests.
+
     The failure is expressed as a non-zero exit status, not just printed output.
     A conformance guard whose only signal is a line in the log is the same
     silent-skip failure one level up.
     """
     _write_manifest()
 
+    report: list[str] = []
+
     failures = consumption_failures()
-    if not failures:
-        return
-    report = [
-        "",
-        "CONFORMANCE ASSERTION LEDGER FAILURES",
-        "  (#lzassertunknownkeys / #lzconsumednotasserted)",
-        "  A fixture asserts something this suite never really checked: a key no",
-        "  runner read, a key a runner read and then discarded, or an excuse that",
-        "  has gone stale. Replaying a fixture is not testing it, and neither is",
-        "  reading a key. Implement the check via assert_key/assert_key_with,",
-        "  declare excuse_key(block, key, reason), or — for narration rather than",
-        "  an assertion — declare it via tracked(prose=...).",
-        "",
-    ]
-    report += [f"  {line}" for line in failures]
-    report.append("")
-    sys.stderr.write("\n".join(report) + "\n")
-    if exitstatus == 0:
+    if failures:
+        report += [
+            "",
+            "CONFORMANCE ASSERTION LEDGER FAILURES",
+            "  (#lzassertunknownkeys / #lzconsumednotasserted)",
+            "  A fixture asserts something this suite never really checked: a key no",
+            "  runner read, a key a runner read and then discarded, or an excuse that",
+            "  has gone stale. Replaying a fixture is not testing it, and neither is",
+            "  reading a key. Implement the check via assert_key/assert_key_with,",
+            "  declare excuse_key(block, key, reason), or — for narration rather than",
+            "  an assertion — declare it via tracked(prose=...).",
+            "",
+        ]
+        report += [f"  {line}" for line in failures]
+        report.append("")
+
+    scenario_bad, scenario_notes = scenario_failures(_opened)
+    if scenario_notes:
+        report += [
+            "",
+            "CONFORMANCE SCENARIO LEDGER NOTICES (#lzscenariocoverage)",
+            "  Scenario id resolved by POSITION because the fixture carries neither",
+            "  `id` nor `name`. Booked, not failed — the fallback is what keeps this",
+            "  guard from being blocked on a shared-corpus edit — but the ids are",
+            "  only as stable as the fixture's ordering.",
+            "",
+        ]
+        report += [f"  {line}" for line in scenario_notes]
+        report.append("")
+    if scenario_bad:
+        report += [
+            "",
+            "CONFORMANCE SCENARIO LEDGER FAILURES (#lzscenariocoverage)",
+            "  A fixture this suite OPENED carries a scenario it never replayed, or",
+            "  an excuse for one that has gone stale. Opening a fixture is not",
+            "  replaying it: the coverage guard sees one scenario and is satisfied,",
+            "  and the key guards never bind a block nobody reaches. Replay the",
+            "  scenario, or declare excuse_scenario(fixture, id, reason) next to",
+            "  KNOWN_UNCOVERED in scripts/check-conformance-coverage.sh.",
+            "",
+        ]
+        report += [f"  {line}" for line in scenario_bad]
+        report.append("")
+
+    if report:
+        sys.stderr.write("\n".join(report) + "\n")
+    if (failures or scenario_bad) and exitstatus == 0:
         session.exitstatus = 1

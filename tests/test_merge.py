@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 import pytest
-from conformance_assert import assert_key, instrument
+from conformance_assert import assert_key, instrument, scenarios
 
 from lazily import (
     KeepLatest,
@@ -129,7 +129,7 @@ def test_mergecell_algebra_fixture() -> None:
     )
     by_name = {"KeepLatest": KeepLatest, "Sum": Sum, "Max": Max}
     seen = 0
-    for scenario in fixture["scenarios"]:
+    for scenario in scenarios(fixture):
         policy = by_name[scenario["policy"]]
         assert policy.commutative == scenario["flags"]["commutative"]
         assert policy.idempotent == scenario["flags"]["idempotent"]

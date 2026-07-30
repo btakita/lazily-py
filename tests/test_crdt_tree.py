@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from conformance_assert import assert_key, instrument
+from conformance_assert import assert_key, instrument, scenario_view
 
 from lazily import CrdtTree, TextCrdt
 
@@ -28,7 +28,17 @@ def _fixture() -> dict:
 
 
 def _scenario(name: str) -> dict:
-    return next(item for item in _fixture()["scenarios"] if item["name"] == name)
+    """Look one scenario up by name, booking it as replayed (#lzscenariocoverage).
+
+    The lookup itself cannot be the record: `next(... if name == ...)` walks past
+    the scenarios ahead of the match, and booking those would claim replay for
+    scenarios this test never enters. Only the one handed back is booked.
+    """
+    fixture = _fixture()
+    index, scenario = next(
+        (i, s) for i, s in enumerate(fixture["scenarios"]) if s["name"] == name
+    )
+    return scenario_view("crdt-tree/algebra.json", scenario, index)
 
 
 def _replicas(scenario: dict) -> tuple[TextCrdt, dict[str, TextCrdt]]:

@@ -16,7 +16,12 @@ import json
 from collections import deque
 from pathlib import Path
 
-from conformance_assert import assert_key, assert_key_with, instrument
+from conformance_assert import (
+    assert_key,
+    assert_key_with,
+    instrument,
+    scenario_view,
+)
 
 from lazily import (
     Delta,
@@ -61,7 +66,17 @@ def _load_fixture(name: str) -> dict:
 
 
 def _scenario(fx: dict, name: str) -> dict:
-    return next(s for s in fx["scenarios"] if s["name"] == name)
+    """Look one scenario up by name, booking it as replayed (#lzscenariocoverage).
+
+    Booking happens on the match, not on the scan: `next(...)` walks past every
+    scenario ahead of the one asked for, and booking those would claim replay for
+    scenarios no test here enters — which is exactly the partial replay this rung
+    exists to surface.
+    """
+    index, scenario = next(
+        (i, s) for i, s in enumerate(fx["scenarios"]) if s["name"] == name
+    )
+    return scenario_view(getattr(fx, "conformance_name", ""), scenario, index)
 
 
 def _msg(wire: dict) -> IpcMessage:

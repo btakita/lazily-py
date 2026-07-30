@@ -1,6 +1,7 @@
 """Tests for the conformance assertion ledger itself.
 
-Two rungs live here (#lzassertunknownkeys, #lzconsumednotasserted). The ledger is
+Three rungs live here (#lzassertunknownkeys, #lzconsumednotasserted,
+#lzscenariocoverage). The ledger is
 the thing that decides whether a conformance failure is reported at all, so it
 needs its own coverage: a guard that quietly stops reporting is the same silent
 skip one level up. And the second rung exists precisely because *reading* a key
@@ -16,6 +17,9 @@ self-test must not fail the suite it is checking.
 
 from __future__ import annotations
 
+import json
+from typing import TYPE_CHECKING
+
 import pytest
 from conformance_assert import (
     TrackedBlock,
@@ -23,10 +27,20 @@ from conformance_assert import (
     assert_key_with,
     consumption_failures,
     excuse_key,
+    excuse_scenario,
     instrument,
+    record_scenario,
+    replayed_scenarios,
     reset,
+    scenario_failures,
+    scenario_id,
+    scenarios,
     tracked,
 )
+
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _report(fixture: str) -> list[str]:
@@ -186,3 +200,161 @@ def test_a_stale_excuse_is_reported() -> None:
     assert "outbox store protocol runner" in reported[0]
 
     reset(fixture="selftest/stale.json")
+
+
+# ---------------------------------------------------------------------------
+# Rung 4: a scenario no runner replayed (#lzscenariocoverage)
+# ---------------------------------------------------------------------------
+
+_SELFTEST = "selftest/scenarios.json"
+
+
+def _corpus(tmp_path: Path, scenario_list: list[dict]) -> Path:
+    """Write a throwaway fixture so the guard has a corpus to compare against.
+
+    Never the shared ``lazily-spec`` corpus: it is read by all nine bindings and a
+    probe written into it reddens every one of them.
+    """
+    path = tmp_path / _SELFTEST
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"scenarios": scenario_list}), encoding="utf-8")
+    return tmp_path
+
+
+def _scenario_report(tmp_path: Path, scenario_list: list[dict]) -> list[str]:
+    # Filtered to this fixture: the guard reports over every excused fixture in
+    # the session, and a self-test must read only the violation it planted.
+    failures, _ = scenario_failures(
+        [_SELFTEST], corpus=_corpus(tmp_path, scenario_list)
+    )
+    return [line for line in failures if line.startswith(_SELFTEST)]
+
+
+def test_scenario_id_resolution_order() -> None:
+    """``id`` beats ``name`` beats the positional fallback — in every binding."""
+    assert scenario_id({"id": "a", "name": "b"}, 0) == "a"
+    assert scenario_id({"name": "b"}, 0) == "b"
+    assert scenario_id({"policy": "Sum"}, 2) == "#2"
+    assert scenario_id({"name": ""}, 1) == "#1"  # empty is not an identifier
+
+
+def test_scenarios_helper_books_a_scenario_the_body_replays() -> None:
+    fixture = instrument(
+        {
+            "scenarios": [
+                {"name": "first", "steps": []},
+                {"name": "second", "steps": []},
+            ]
+        },
+        name=_SELFTEST,
+    )
+    for scenario in scenarios(fixture):
+        scenario["steps"]
+    assert replayed_scenarios()[_SELFTEST] == {"first", "second"}
+
+    reset(fixture=_SELFTEST)
+
+
+def test_scenarios_helper_does_not_book_a_scenario_the_body_skips() -> None:
+    """Yielding is not replaying — the hole a yield-time record would leave open.
+
+    A generator cannot tell a body that ran from one that ``continue``d, so the
+    booking rides on the scenario's *payload*: ``id``/``name`` are what a skip
+    reads on the way past, ``steps``/``ops``/``expect`` are what a replay reads.
+    """
+    fixture = instrument(
+        {
+            "scenarios": [
+                {"name": "first", "steps": []},
+                {"name": "skipped", "steps": []},
+            ]
+        },
+        name=_SELFTEST,
+    )
+    for scenario in scenarios(fixture):
+        if scenario["name"] == "skipped":
+            continue
+        scenario["steps"]
+    assert replayed_scenarios()[_SELFTEST] == {"first"}
+
+    reset(fixture=_SELFTEST)
+
+
+def test_scenarios_helper_needs_a_named_fixture() -> None:
+    with pytest.raises(AssertionError, match="corpus-relative fixture path"):
+        list(scenarios({"scenarios": [{"name": "x"}]}))
+
+
+def test_a_skipped_scenario_is_reported(tmp_path: Path) -> None:
+    """The defect this rung exists for: fixture opened, one scenario never run."""
+    record_scenario(_SELFTEST, {"name": "replayed"})
+    reported = _scenario_report(tmp_path, [{"name": "replayed"}, {"name": "skipped"}])
+    assert reported, "a skipped scenario produced no report line"
+    assert "'skipped'" in reported[0]
+    assert "never replayed" in reported[0]
+
+    reset(fixture=_SELFTEST)
+
+
+def test_positional_fallback_is_a_notice_not_a_failure(tmp_path: Path) -> None:
+    record_scenario(_SELFTEST, {"policy": "Sum"}, 0)
+    failures, notices = scenario_failures(
+        [_SELFTEST], corpus=_corpus(tmp_path, [{"policy": "Sum"}])
+    )
+    assert not [line for line in failures if line.startswith(_SELFTEST)]
+    assert notices and "#0" in notices[0]
+
+    reset(fixture=_SELFTEST)
+
+
+def test_excuse_scenario_satisfies_the_scenario(tmp_path: Path) -> None:
+    excuse_scenario(_SELFTEST, "skipped", "no lease clock in this binding")
+    assert not _scenario_report(tmp_path, [{"name": "skipped"}])
+
+    reset(fixture=_SELFTEST)
+
+
+def test_excuse_scenario_requires_a_reason() -> None:
+    with pytest.raises(AssertionError, match="non-empty reason"):
+        excuse_scenario(_SELFTEST, "skipped", "  ")
+    reset(fixture=_SELFTEST)
+
+
+def test_an_excuse_for_a_replayed_scenario_is_stale(tmp_path: Path) -> None:
+    """Both directions: an excuse the run disproves hides nothing."""
+    record_scenario(_SELFTEST, {"name": "replayed"})
+    excuse_scenario(_SELFTEST, "replayed", "believed unexpressible")
+    reported = _scenario_report(tmp_path, [{"name": "replayed"}])
+    assert reported, "a stale scenario excuse produced no report line"
+    assert "is stale" in reported[0]
+    assert "believed unexpressible" in reported[0]
+
+    reset(fixture=_SELFTEST)
+
+
+def test_an_excuse_for_an_absent_scenario_has_rotted(tmp_path: Path) -> None:
+    record_scenario(_SELFTEST, {"name": "replayed"})
+    excuse_scenario(_SELFTEST, "renamed_upstream", "was unexpressible")
+    reported = _scenario_report(tmp_path, [{"name": "replayed"}])
+    assert reported, "a rotted scenario excuse produced no report line"
+    assert "rotted" in reported[0]
+    assert "renamed_upstream" in reported[0]
+
+    reset(fixture=_SELFTEST)
+
+
+def test_an_excuse_naming_a_missing_fixture_has_rotted(tmp_path: Path) -> None:
+    excuse_scenario("selftest/gone.json", "whatever", "the corpus moved")
+    failures, _ = scenario_failures([], corpus=tmp_path)
+    reported = [line for line in failures if line.startswith("selftest/gone.json")]
+    assert reported and "not in the canonical corpus" in reported[0]
+
+    reset(fixture="selftest/gone.json")
+
+
+def test_a_fixture_the_suite_never_opened_is_not_held_to_scenarios(
+    tmp_path: Path,
+) -> None:
+    """Fixture-level gaps are ``KNOWN_UNCOVERED``'s verdict, not this rung's."""
+    failures, _ = scenario_failures([], corpus=_corpus(tmp_path, [{"name": "x"}]))
+    assert not [line for line in failures if line.startswith(_SELFTEST)]
