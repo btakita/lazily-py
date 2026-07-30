@@ -1,5 +1,19 @@
 ## Unreleased
 
+### Added
+
+- Transport-agnostic reactive ingress family (`#designimplementtransport`):
+  `IngressCore` (the graph-agnostic admission algebra) plus all three flavor
+  shells — `IngressCell`, `ThreadSafeIngressCell`, `AsyncIngressCell`. Keyed
+  lifecycle scopes, a normative admission order (lifecycle → generation fence →
+  freshness → generation handoff → dedupe → ordering → backpressure → merge), a
+  bounded reorder buffer, a coalescing hot window under `MergePolicy`, and a
+  bounded three-channel receipt log with eviction-stable offsets. Readiness,
+  authority, and retry are derives rather than refresh calls, backpressure reuses
+  the relay `Overflow` algebra, and a drain is an egress rather than an ack. All
+  seven canonical `lazily-spec/conformance/ingress/*.json` fixtures replay against
+  every flavor, with per-reader-kind invalidation asserted in both directions.
+
 ## 0.39.0
 
 ### Added

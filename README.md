@@ -128,9 +128,9 @@ notes and platform carve-outs lives in
 | Portable stdlib caller-driven `Timeout<T>` (`stdlib_timeout_v1`) — distinct from reactive `TimeoutCell` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Portable stdlib `RevisionBarrier` (`stdlib_revision_barrier_v1`) — register/recheck lost-wakeup guard | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Embedded-service plane — `HealthCell` / `ReadinessCell` / `DiscoveryCell` / `ServiceRegistry` (`#lzservice`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Transport-agnostic reactive ingress (`IngressCell`) — keyed lifecycle scopes, generation/sequence/freshness envelopes, reorder buffer, accepted/dropped/error receipt readers (`#designimplementtransport`) | ✅ | — | — | — | — | — | — | — | — |
-| Ingress family — `Send + Sync` flavor (`ThreadSafeIngressCell`): one frontier walk per admission (`#designimplementtransport`) | ✅ | — | — | — | — | — | — | — | — |
-| Ingress family — async flavor (`AsyncIngressCell`): admission is not async-coloured (`#designimplementtransport`) | ✅ | — | — | — | — | — | — | — | — |
+| Transport-agnostic reactive ingress (`IngressCell`) — keyed lifecycle scopes, generation/sequence/freshness envelopes, reorder buffer, accepted/dropped/error receipt readers (`#designimplementtransport`) | ✅ | ✅ | — | — | — | — | — | — | — |
+| Ingress family — `Send + Sync` flavor (`ThreadSafeIngressCell`): one frontier walk per admission (`#designimplementtransport`) | ✅ | ✅ | — | — | — | — | — | — | — |
+| Ingress family — async flavor (`AsyncIngressCell`): admission is not async-coloured (`#designimplementtransport`) | ✅ | ✅ | — | — | — | — | — | — | — |
 <!-- coverage-table:end -->
 
 ## Installation
@@ -381,6 +381,52 @@ assert work.ack("worker-a", delivery.delivery_id)
 The reader-kind independence law is explicit: every successful operation
 derives its changed-reader set from the before/after state and resets those
 memoized handles in one batch. Unchanged reader kinds remain warm.
+
+## Transport-agnostic reactive ingress — `lazily.ingress`
+
+A client consuming a remote stream usually grows four accidental mechanisms: a
+`refresh()` loop that re-reads whether the connection is healthy, a hand-rolled
+"is this message still relevant?" check, a reconnect path that forgets what was
+already applied, and transport-shaped consumer code that disagrees with itself
+per transport. Every one of those is a *derive* being simulated with a call.
+`IngressCell` makes them derives, and makes the transport a value the primitive
+never touches.
+
+An envelope carries its own provenance (`generation` / `sequence` /
+`stamped_at`), so a WebSocket frame, an RPC response, and a polled page are the
+same input once decoded. Admission applies a normative order — lifecycle →
+generation fence → freshness → generation handoff → dedupe → ordering →
+backpressure → merge — and each keyed scope exposes four independent reader kinds
+plus three receipt channels.
+
+```python
+from lazily import IngressCell, IngressEnvelope, IngressPolicy, Sum
+
+ctx: dict = {}
+ingress = IngressCell[str, int](ctx, IngressPolicy(reorder_window=4), Sum)
+
+ingress.admit(IngressEnvelope("alpha", 1, 0, 0, 5))
+assert ingress.value("alpha") == 5
+assert ingress.readiness("alpha") == "ready"     # a derive, not a poll
+
+# Out of order: buffered, so nothing a reader can observe moved.
+ingress.admit(IngressEnvelope("alpha", 1, 2, 0, 4))
+assert ingress.value_is_valid("alpha")            # the value reader stays warm
+
+# The delivery that closes the gap flushes the run as ONE coalesced window.
+ingress.admit(IngressEnvelope("alpha", 1, 1, 0, 2))
+assert ingress.value("alpha") == 11
+assert ingress.drain("alpha") == 11               # an egress, never an ack
+assert ingress.suspend("alpha").from_sequence == 3
+```
+
+`ThreadSafeIngressCell` and `AsyncIngressCell` are the other two flavors of the
+same contract; all three replay the canonical
+`lazily-spec/conformance/ingress/*.json` corpus. Nothing in the family is
+async-coloured — an admission decision is a function of the fence, the watermark,
+the reorder buffer, and the observed clock, so there is nothing to await.
+Awaiting belongs to the transport, and the transport is outside the primitive by
+construction.
 
 ## IPC — the `lazily-spec` wire protocol
 
