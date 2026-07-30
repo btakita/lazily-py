@@ -29,12 +29,6 @@ fi
 KNOWN_UNCOVERED=(
   "agent-doc/delta_agent_doc_state.json"
   "agent-doc/snapshot_agent_doc_state.json"
-  "collections/topiccell_broadcast_cursor_isolation.json"
-  "collections/topiccell_durable_replay_gc.json"
-  "collections/topiccell_ephemeral_lifecycle.json"
-  "collections/topiccell_offline_tail_bounds.json"
-  "collections/workqueue_competing_delivery.json"
-  "collections/workqueue_lease_deadletter.json"
   "reliable-sync/coalesce_bounds_outbox.json"
   "reliable-sync/liveness_lease_eviction.json"
 )
@@ -89,11 +83,28 @@ while IFS= read -r fixture; do
   fi
 done < <(cd "$SPEC_DIR" && find . -name '*.json' | sed 's|^\./||' | sort)
 
-# A stale allowlist is its own drift: an entry naming a fixture that no longer
-# exists means the corpus moved and nobody updated the excuse.
+# A stale allowlist is its own drift, in two directions:
+#
+#   1. An entry naming a fixture that no longer exists means the corpus moved and
+#      nobody updated the excuse.
+#   2. An entry naming a fixture the suite DOES open is a stale excuse. Nobody
+#      files a bug about coverage they are told they lack, so a stale excuse hides
+#      real work already done and pads the list until the genuine gaps are
+#      unreadable. This is ledger rot in the understating direction.
+#
+# The covered-check above and the stale-check below use the SAME comparison
+# (`grep -qxF` against "$OPENED") so the two can never disagree about whether a
+# given fixture was opened.
 for known in "${KNOWN_UNCOVERED[@]:-}"; do
   if [ ! -f "$SPEC_DIR/$known" ]; then
     echo "ERROR: KNOWN_UNCOVERED lists '$known', which is not in the canonical corpus." >&2
+    missing=$((missing + 1))
+    continue
+  fi
+  if grep -qxF "$known" <<< "$OPENED"; then
+    echo "ERROR: KNOWN_UNCOVERED lists '$known', but the suite DID open it." >&2
+    echo "       The excuse is stale: this fixture is covered. Delete the entry from" >&2
+    echo "       KNOWN_UNCOVERED so the list keeps naming only the real gaps." >&2
     missing=$((missing + 1))
   fi
 done
