@@ -58,7 +58,7 @@ type-check:
 # Run all checks
 .PHONY: test-interop-peer
 test-interop-peer:
-	uv run python -m lazily.interop_peer --self-check
+	uv run poe interop_peer
 
 check: format lint type-check test conformance-coverage test-interop-peer
 

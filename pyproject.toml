@@ -96,6 +96,11 @@ init = "uv sync --all-groups"
 # a guard nobody's CI executes is a guard that does not exist. `conformance_manifest`
 # truncates and exports the manifest the recorder appends to, exactly as the
 # Makefile did locally; `conformance_coverage` reads it back.
+# `interop_peer` joins the list for the same reason the coverage guard did
+# (#lzinteroppeerci): `make check` ran the cross-binding wire-compatibility peer
+# and no binding's CI ran it anywhere. Nine bindings have to agree on a byte
+# layout, and a gate that only ever executes on a laptop is how they quietly
+# stop agreeing.
 precommit = [
     "ty",
     "ruff_fix",
@@ -103,7 +108,9 @@ precommit = [
     "conformance_manifest",
     "test",
     "conformance_coverage",
+    "interop_peer",
 ]
+interop_peer = "python -m lazily.interop_peer --self-check"
 ruff_fix = "ruff check --fix"
 run_readme = "python -m tests.run_readme"
 ty = "ty check src"
