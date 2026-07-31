@@ -1,0 +1,157 @@
+{
+  "description": "Frame-codec round-trip obligation for the `msgpack` CROSS-LANGUAGE BINARY DEFAULT (protocol.md § Frame codecs, #lzmsgpackparity). msgpack is a MUST for every binding and is implemented by two of nine; the other seven declare it as an explicit `carve_out` in their interop-peer handshake. That carve-out is honest and fails closed, but it was invisible to every parity surface: coverage.json had no codec row, and the four conformance rungs all reason about fixture CONTENT replay rather than codec round-tripping. This fixture is the msgpack half of the executable obligation, and a binding that does not implement msgpack now has to say so in its `KNOWN_UNCOVERED` ledger — the same place every other declared gap lives. The `wire` values are byte-identical to frame_roundtrip_json.json: the fixture pins the DECODED VALUE, never a golden byte string, because a MessagePack map's key order is encoder-defined and two conforming bindings MAY emit byte-different frames for the same IpcMessage (§ Frame codecs, 'Conformance is semantic round-trip, not byte-identical, for the map codecs'). A runner MUST decode `wire` from the reference json form, ENCODE it to msgpack bytes, DECODE those bytes back, and evaluate every `expect` key against that decode.",
+  "protocol_version": 1,
+  "kind": "FrameCodecRoundTrip",
+  "codec": "msgpack",
+  "assertions": {
+    "codec": "msgpack",
+    "self_describing": true,
+    "byte_canonical": false,
+    "required_of_binding": "MUST",
+    "role": "cross_language_binary_default",
+    "scenario_count": 3,
+    "note": "`byte_canonical: false` is the whole reason this fixture pins decoded values instead of golden bytes. msgpack frames encode each struct as a MessagePack MAP KEYED BY THE JSON FIELD NAME (Rust: `rmp_serde::to_vec_named`), not as a positional array — that is what keeps the omit-when-absent rule for the optional `key` uniform across json and msgpack, and it is what `encoded_body_field_names` below verifies. A positional encoder passes a naive value round trip and fails those keys."
+  },
+  "scenarios": [
+    {
+      "id": "snapshot_frame_round_trips_msgpack",
+      "name": "snapshot_frame_round_trips_msgpack",
+      "description": "The `Snapshot` variant survives a msgpack round trip, and the encoded frame is a named-field map. `encoded_envelope_key` pins the externally-tagged variant name at the top level; `encoded_body_field_names` (SORTED — msgpack map key order is encoder-defined, so a runner MUST sort before comparing) pins the named-field encoding. A positional array encoder round-trips fine and fails both. `first_node_encoded_field_names` carries NO `key`: `NodeSnapshot.key` is optional and a SELF-DESCRIBING codec omits it when absent (protocol.md § NodeKey), which is the rule that lets a pre-`key` decoder read a post-`key` frame. That the rule holds under msgpack exactly as under json is the whole point of named-field encoding.",
+      "variant": "Snapshot",
+      "expect": {
+        "round_trip_equals_source": true,
+        "encoded_envelope_key": "Snapshot",
+        "encoded_body_field_names": ["edges", "epoch", "nodes", "roots"],
+        "first_node_encoded_field_names": ["node", "state", "type_tag"],
+        "epoch": 7,
+        "node_count": 3,
+        "edge_count": 2,
+        "root_count": 2,
+        "first_node_type_tag": "i32",
+        "first_node_payload": [1, 2, 3],
+        "opaque_node_id": 3,
+        "opaque_node_state_tag": "Opaque",
+        "first_edge": [2, 1],
+        "roots": [1, 2]
+      },
+      "wire": {
+        "Snapshot": {
+          "epoch": 7,
+          "nodes": [
+            {
+              "node": 1,
+              "type_tag": "i32",
+              "state": {
+                "Payload": [1, 2, 3]
+              }
+            },
+            {
+              "node": 2,
+              "type_tag": "f64",
+              "state": {
+                "Payload": [0, 0, 0, 0, 0, 0, 240, 63]
+              }
+            },
+            {
+              "node": 3,
+              "type_tag": "opaque-type",
+              "state": "Opaque"
+            }
+          ],
+          "edges": [
+            { "dependent": 2, "dependency": 1 },
+            { "dependent": 3, "dependency": 1 }
+          ],
+          "roots": [1, 2]
+        }
+      }
+    },
+    {
+      "id": "delta_frame_round_trips_msgpack",
+      "name": "delta_frame_round_trips_msgpack",
+      "description": "The `Delta` variant survives a msgpack round trip across all seven DeltaOp variants, with the op envelope still externally tagged and the op body still a named-field map.",
+      "variant": "Delta",
+      "expect": {
+        "round_trip_equals_source": true,
+        "encoded_envelope_key": "Delta",
+        "encoded_body_field_names": ["base_epoch", "epoch", "ops"],
+        "base_epoch": 40,
+        "epoch": 41,
+        "op_count": 7,
+        "op_variants": [
+          "CellSet",
+          "SlotValue",
+          "Invalidate",
+          "NodeAdd",
+          "NodeRemove",
+          "EdgeAdd",
+          "EdgeRemove"
+        ],
+        "first_op_payload": [10],
+        "node_add_type_tag": "u64"
+      },
+      "wire": {
+        "Delta": {
+          "base_epoch": 40,
+          "epoch": 41,
+          "ops": [
+            { "CellSet": { "node": 1, "payload": { "Inline": [10] } } },
+            { "SlotValue": { "node": 2, "payload": { "Inline": [20] } } },
+            { "Invalidate": { "node": 3 } },
+            {
+              "NodeAdd": {
+                "node": 4,
+                "type_tag": "u64",
+                "state": { "Payload": [64] }
+              }
+            },
+            { "NodeRemove": { "node": 5 } },
+            { "EdgeAdd": { "dependent": 2, "dependency": 1 } },
+            { "EdgeRemove": { "dependent": 3, "dependency": 1 } }
+          ]
+        }
+      }
+    },
+    {
+      "id": "crdt_sync_frame_round_trips_msgpack",
+      "name": "crdt_sync_frame_round_trips_msgpack",
+      "description": "The `CrdtSync` variant survives a msgpack round trip with its frontier stamps and its keyed/keyless op split intact. `CrdtOp` differs from `NodeSnapshot` here and the difference is deliberate: a `CrdtOp` ALWAYS carries `key` (null when unset, as distributed/crdt_sync_frames.json states), because an anti-entropy op's addressing is part of the merge identity, whereas an absent `NodeSnapshot.key` is omitted. Both encoded field-name lists therefore carry `key`, and `first_op_key_absent` is asserted on the DECODED value, not on the encoding. Lists are sorted; msgpack map key order is encoder-defined.",
+      "variant": "CrdtSync",
+      "expect": {
+        "round_trip_equals_source": true,
+        "encoded_envelope_key": "CrdtSync",
+        "encoded_body_field_names": ["frontier", "ops"],
+        "first_op_encoded_field_names": ["key", "node", "stamp", "state"],
+        "second_op_encoded_field_names": ["key", "node", "stamp", "state"],
+        "frontier_len": 1,
+        "frontier_first_peer": 1,
+        "frontier_first_stamp_wall_time": 5,
+        "op_count": 2,
+        "first_op_node": 1,
+        "first_op_key_absent": true,
+        "second_op_node": 2,
+        "second_op_key": "scores/alice",
+        "second_op_stamp_peer": 2
+      },
+      "wire": {
+        "CrdtSync": {
+          "frontier": [[1, { "wall_time": 5, "logical": 0, "peer": 1 }]],
+          "ops": [
+            {
+              "node": 1,
+              "key": null,
+              "stamp": { "wall_time": 5, "logical": 0, "peer": 1 },
+              "state": { "Inline": [1] }
+            },
+            {
+              "node": 2,
+              "key": "scores/alice",
+              "stamp": { "wall_time": 6, "logical": 1, "peer": 2 },
+              "state": { "Inline": [2, 3] }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

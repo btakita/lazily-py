@@ -1,0 +1,148 @@
+{
+  "description": "Frame-codec round-trip obligation for the `json` REFERENCE codec (protocol.md § Frame codecs, #lzmsgpackparity). protocol.md states the codec requirement in prose — 'every fixture's frames MUST round-trip through both json and msgpack for all three IpcMessage variants' — and nothing tested it: the four conformance rungs all reason about fixture CONTENT replay, so a binding could carve a MUST-level codec out and stay green. This fixture makes the json half of that obligation executable. Each scenario pins one IpcMessage variant; a runner MUST decode `wire` under the json codec, RE-ENCODE the decoded message, DECODE it again, and evaluate every `expect` key against the SECOND decode — not against the fixture literal. A runner that asserts against `wire` itself proves nothing, because `wire` never passed through the codec. `round_trip_equals_source` is the runner's own computed decode(encode(decode(wire))) == decode(wire), so a codec that drops or mangles a field fails it. json is byte-canonical per codec (§ Frame codecs) but this fixture pins the DECODED VALUE, never a golden byte string, so the same runner shape ports to msgpack in frame_roundtrip_msgpack.json — the two fixtures carry identical `wire` values on purpose.",
+  "protocol_version": 1,
+  "kind": "FrameCodecRoundTrip",
+  "codec": "json",
+  "assertions": {
+    "codec": "json",
+    "self_describing": true,
+    "byte_canonical": true,
+    "required_of_binding": "MUST",
+    "role": "reference",
+    "scenario_count": 3,
+    "note": "`role: reference` is the codec's ROLE — the required dependency-free interop floor every binding MUST speak, what the FFI baseline re-encodes to, what fixtures are written in. `byte_canonical` is a separate property of codec+message. protocol.md § Frame codecs keeps the two senses distinct; both are pinned here so a runner cannot conflate them."
+  },
+  "scenarios": [
+    {
+      "id": "snapshot_frame_round_trips_json",
+      "name": "snapshot_frame_round_trips_json",
+      "description": "The `Snapshot` variant survives a json round trip with payload bytes, edges, roots, and the Opaque unit variant intact. `first_node_payload` is the discriminating field: a codec that re-encodes `Payload` as a base64 string or truncates the byte array fails it even though `node_count`/`epoch` still match. `opaque_node_state_tag` pins the externally-tagged UNIT variant, which is the shape most likely to decay into `{\"Opaque\": null}`.",
+      "variant": "Snapshot",
+      "expect": {
+        "round_trip_equals_source": true,
+        "epoch": 7,
+        "node_count": 3,
+        "edge_count": 2,
+        "root_count": 2,
+        "first_node_type_tag": "i32",
+        "first_node_payload": [1, 2, 3],
+        "opaque_node_id": 3,
+        "opaque_node_state_tag": "Opaque",
+        "first_edge": [2, 1],
+        "roots": [1, 2]
+      },
+      "wire": {
+        "Snapshot": {
+          "epoch": 7,
+          "nodes": [
+            {
+              "node": 1,
+              "type_tag": "i32",
+              "state": {
+                "Payload": [1, 2, 3]
+              }
+            },
+            {
+              "node": 2,
+              "type_tag": "f64",
+              "state": {
+                "Payload": [0, 0, 0, 0, 0, 0, 240, 63]
+              }
+            },
+            {
+              "node": 3,
+              "type_tag": "opaque-type",
+              "state": "Opaque"
+            }
+          ],
+          "edges": [
+            { "dependent": 2, "dependency": 1 },
+            { "dependent": 3, "dependency": 1 }
+          ],
+          "roots": [1, 2]
+        }
+      }
+    },
+    {
+      "id": "delta_frame_round_trips_json",
+      "name": "delta_frame_round_trips_json",
+      "description": "The `Delta` variant survives a json round trip across all seven DeltaOp variants. Op ORDER and op IDENTITY are the discriminating fields: a codec that re-encodes the externally-tagged op envelope as an internally-tagged `{\"type\": ...}` object, or reorders ops, fails `op_variants` even though `op_count` still matches.",
+      "variant": "Delta",
+      "expect": {
+        "round_trip_equals_source": true,
+        "base_epoch": 40,
+        "epoch": 41,
+        "op_count": 7,
+        "op_variants": [
+          "CellSet",
+          "SlotValue",
+          "Invalidate",
+          "NodeAdd",
+          "NodeRemove",
+          "EdgeAdd",
+          "EdgeRemove"
+        ],
+        "first_op_payload": [10],
+        "node_add_type_tag": "u64"
+      },
+      "wire": {
+        "Delta": {
+          "base_epoch": 40,
+          "epoch": 41,
+          "ops": [
+            { "CellSet": { "node": 1, "payload": { "Inline": [10] } } },
+            { "SlotValue": { "node": 2, "payload": { "Inline": [20] } } },
+            { "Invalidate": { "node": 3 } },
+            {
+              "NodeAdd": {
+                "node": 4,
+                "type_tag": "u64",
+                "state": { "Payload": [64] }
+              }
+            },
+            { "NodeRemove": { "node": 5 } },
+            { "EdgeAdd": { "dependent": 2, "dependency": 1 } },
+            { "EdgeRemove": { "dependent": 3, "dependency": 1 } }
+          ]
+        }
+      }
+    },
+    {
+      "id": "crdt_sync_frame_round_trips_json",
+      "name": "crdt_sync_frame_round_trips_json",
+      "description": "The `CrdtSync` variant survives a json round trip with its frontier stamps and its keyed/keyless op split intact. `WireStamp` uses `peer` (never `peer_id`). The optional `NodeKey` is the discriminating field: a self-describing codec OMITS `key` when absent (protocol.md § NodeKey), so a decoder must read an omitted key as absent and a re-encoder must not invent one.",
+      "variant": "CrdtSync",
+      "expect": {
+        "round_trip_equals_source": true,
+        "frontier_len": 1,
+        "frontier_first_peer": 1,
+        "frontier_first_stamp_wall_time": 5,
+        "op_count": 2,
+        "first_op_node": 1,
+        "first_op_key_absent": true,
+        "second_op_node": 2,
+        "second_op_key": "scores/alice",
+        "second_op_stamp_peer": 2
+      },
+      "wire": {
+        "CrdtSync": {
+          "frontier": [[1, { "wall_time": 5, "logical": 0, "peer": 1 }]],
+          "ops": [
+            {
+              "node": 1,
+              "key": null,
+              "stamp": { "wall_time": 5, "logical": 0, "peer": 1 },
+              "state": { "Inline": [1] }
+            },
+            {
+              "node": 2,
+              "key": "scores/alice",
+              "stamp": { "wall_time": 6, "logical": 1, "peer": 2 },
+              "state": { "Inline": [2, 3] }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
