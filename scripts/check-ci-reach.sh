@@ -45,6 +45,19 @@
 #   `go test -count=1`, so dropping the race job reddens this guard instead of
 #   being absorbed by the plain test job.
 #
+#   An argument that is still a VARIABLE reference at this point — `$MANIFEST` in
+#   a CI step, or a `$$VAR` a recipe leaves for the shell — names a value the
+#   guard cannot resolve, so it becomes a WILDCARD matching exactly one token on
+#   the other side (#lzcireachvaranchor). Make and CI routinely spell the same
+#   path differently, one through an expanded `$(VAR)` and the other through the
+#   environment, and they are the same command. Dropping the token instead, which
+#   is what this used to do, lost the argument as well as its value and reported
+#   a step that genuinely ran the gate as unreachable — a false RED that cost one
+#   binding a hardcoded second spelling of the path plus a hand-written equality
+#   assertion, which is a new drift surface invented to satisfy a guard whose job
+#   is detecting drift. Arity still counts: `script.sh $A` does not match a CI
+#   step that passes no argument at all.
+#
 #   Commands whose program is a shell builtin or a plain file/text utility carry no
 #   gate, so they contribute no anchor. A target with no non-trivial command at all
 #   (a mkdir-only reset step, say) is reported as carrying no gate and is not
@@ -303,6 +316,9 @@ ci_commands() {
 anchors() {
 	awk '
 		BEGIN {
+			# Sentinel for an unresolvable variable reference. Deliberately not a
+			# string any real argument can be.
+			ANY = "\001any"
 			split(": true false echo printf cd pushd popd mkdir rmdir rm cp mv ln touch " \
 			      "export unset set local read eval exec trap wait sleep exit return " \
 			      "if then else elif fi for while until do done case esac function " \
@@ -370,7 +386,24 @@ anchors() {
 					sub(/.*\//, "", tok)
 					if (tok == "" || tok ~ /^\.{1,3}$/) continue
 				}
-				if (substr(tok, 1, 1) == "$") continue
+					# A token that is still a shell/make VARIABLE reference names a
+					# value this guard cannot resolve — a CI step spelling a path as
+					# "$LAZILY_CONFORMANCE_MANIFEST" and a Makefile recipe spelling the
+					# same path through an expanded $(VAR) are the same command. Dropping
+					# it (what this used to do) loses the ARGUMENT as well as its value,
+					# so `script.sh <path>` no longer matched a CI step that really ran
+					# `script.sh "$PATH"` and the target was reported unreachable. That is
+					# a false RED, and it cost lazily-cpp a hardcoded second spelling of
+					# the path plus a hand-written equality assertion to keep the two in
+					# sync — a new drift surface invented to satisfy a guard that exists
+					# to detect drift.
+					#
+					# Emit a WILDCARD instead: one token that matches one token, so arity
+					# is preserved. `script.sh $A` still fails against a CI step that
+					# passes no argument at all. This is the same looseness the normalizer
+					# already applies to paths, which it reduces to basenames — reach is a
+					# floor, not equivalence, exactly as the header says.
+					if (substr(tok, 1, 1) == "$") { out = out " " ANY; continue }
 				out = out " " tok
 			}
 			if (started && out != "") print out
@@ -396,11 +429,14 @@ fi
 # not.
 anchor_reached() {
 	awk -v want="$1" '
-		BEGIN { wn = split(want, w, / /) }
+		BEGIN { ANY = "\001any"; wn = split(want, w, / /) }
 		{
 			hn = split($0, h, / /)
 			wi = 1
-			for (hi = 1; hi <= hn && wi <= wn; hi++) if (h[hi] == w[wi]) wi++
+			# A wildcard on EITHER side matches, because either side may be the
+			# one that spelled the argument through a variable.
+			for (hi = 1; hi <= hn && wi <= wn; hi++)
+				if (h[hi] == w[wi] || h[hi] == ANY || w[wi] == ANY) wi++
 			if (wi > wn) { found = 1; exit }
 		}
 		END { exit found ? 0 : 1 }
