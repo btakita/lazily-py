@@ -1,4 +1,4 @@
-.PHONY: init build test lint format type-check clean publish-test publish bench bench-scale compile conformance-coverage ci-reach
+.PHONY: init build test lint lint-fix format-check format-fix type-check clean publish-test publish bench bench-scale compile conformance-coverage ci-reach
 
 # Install development dependencies and package in editable mode
 init: PY_VERSION = $(shell [ -f .python-version ] && \
@@ -43,13 +43,30 @@ compile:
 test-cov:
 	uv run pytest tests/ --cov=lazily --cov-report=html --cov-report=term-missing
 
-# Format code with ruff
-format:
+# The formatting and lint GATES (#lzruffautofixvacuity).
+#
+# Both are spelled non-repairing on purpose. A gate that rewrites the tree it is
+# judging cannot fail: `ruff format` reformats and exits 0, and a bare
+# `ruff check` used to auto-fix because pyproject set `[tool.ruff] fix = true`,
+# so `make check` repaired its way to green and a developer could not reproduce
+# what CI enforces. `fix = true` is gone from pyproject as well, so a bare
+# `ruff check` gates everywhere; `--no-fix` here is the belt to that braces —
+# re-adding the setting cannot silently un-gate this target.
+#
+# The repairing forms live in `format-fix` / `lint-fix`, named so that running
+# one is a decision rather than a side effect. Neither is in `check`.
+format-check:
+	uv run ruff format --check src/lazily/ tests/
+
+lint:
+	uv run ruff check --no-fix src/lazily/ tests/
+
+# Repairing forms — rewrite the tree. Never in `check`.
+format-fix:
 	uv run ruff format src/lazily/ tests/
 
-# Lint code with ruff
-lint:
-	uv run ruff check src/lazily/ tests/
+lint-fix:
+	uv run ruff check --fix src/lazily/ tests/
 
 # Type check
 type-check:
@@ -60,7 +77,7 @@ type-check:
 test-interop-peer:
 	uv run poe interop_peer
 
-check: format lint type-check test conformance-coverage test-interop-peer ci-reach
+check: format-check lint type-check test conformance-coverage test-interop-peer ci-reach
 
 # Run the micro-benchmark suite (see BENCHMARKS.md)
 bench:

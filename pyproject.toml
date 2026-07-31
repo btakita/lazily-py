@@ -103,7 +103,8 @@ init = "uv sync --all-groups"
 # stop agreeing.
 precommit = [
     "ty",
-    "ruff_fix",
+    "ruff_format_check",
+    "ruff_check",
     "run_readme",
     "conformance_manifest",
     "test",
@@ -111,7 +112,16 @@ precommit = [
     "interop_peer",
 ]
 interop_peer = "python -m lazily.interop_peer --self-check"
+# The lint/format GATES (#lzruffautofixvacuity). Non-repairing on purpose: a
+# linter that rewrites the tree it is judging exits 0 no matter what it found,
+# so `precommit` used to self-heal to green instead of gating, and formatting
+# was not checked at all. The repairing forms below are named `*_fix` and are
+# deliberately NOT in `precommit` — running one is a decision, not a side
+# effect.
+ruff_check = "ruff check --no-fix"
+ruff_format_check = "ruff format --check"
 ruff_fix = "ruff check --fix"
+ruff_format_fix = "ruff format"
 run_readme = "python -m tests.run_readme"
 ty = "ty check src"
 
@@ -139,8 +149,10 @@ target-version = "py312"
 # Set the maximum line length to 88 (Black's default)
 line-length = 88
 
-# Enable auto-fixing for fixable rules
-fix = true
+# NO `fix = true` (#lzruffautofixvacuity). It made a bare `ruff check` repair
+# the tree it was judging and exit 0, which turned every lint gate that did not
+# remember `--no-fix` into a gate that cannot fail. Auto-fixing is available
+# explicitly: `make lint-fix` / `poe ruff_fix`.
 
 # Exclude common directories
 exclude = [
