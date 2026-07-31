@@ -304,16 +304,37 @@ anchors() {
 			for (i in t) if (t[i] != "") trivial[t[i]] = 1
 		}
 		{
-			line = $0
-			gsub(/[`"'"'"']/, " ", line)
-			gsub(/\$\(/, " ", line)
-			gsub(/\$\{/, " ", line)
-			gsub(/[(){}]/, " ", line)
-			gsub(/&&|\|\||[;|]/, "\n", line)
-			n = split(line, cmds, /\n/)
+			n = split(split_unquoted($0), cmds, /\n/)
 			for (i = 1; i <= n; i++) emit(cmds[i])
 		}
+		# Split on the shell'"'"'s sequencing operators, but ONLY outside quotes. Doing
+		# this before quotes are stripped is what stops a `;` inside a message —
+		# `echo "missing $(DIR); clone the sibling"` — from being read as a second
+		# command and inventing an anchor for a gate that does not exist. That is a
+		# false RED, so it costs a real target its verdict.
+		function split_unquoted(s,   i, c, nxt, len, inq, q, out) {
+			out = ""; inq = 0; q = ""; len = length(s)
+			for (i = 1; i <= len; i++) {
+				c = substr(s, i, 1)
+				if (inq) {
+					if (c == q) { inq = 0; q = "" }
+					out = out c
+					continue
+				}
+				if (c == "\"" || c == "'"'"'" || c == "`") { inq = 1; q = c; out = out c; continue }
+				nxt = substr(s, i + 1, 1)
+				if (c == ";") { out = out "\n"; continue }
+				if ((c == "&" && nxt == "&") || (c == "|" && nxt == "|")) { out = out "\n"; i++; continue }
+				if (c == "|") { out = out "\n"; continue }
+				out = out c
+			}
+			return out
+		}
 		function emit(cmd,   m, j, tok, out, prog, started, parts) {
+			gsub(/[`"'"'"']/, " ", cmd)
+			gsub(/\$\(/, " ", cmd)
+			gsub(/\$\{/, " ", cmd)
+			gsub(/[(){}]/, " ", cmd)
 			m = split(cmd, parts, /[[:space:]]+/)
 			prog = ""
 			out = ""
