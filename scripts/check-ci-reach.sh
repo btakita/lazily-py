@@ -137,10 +137,17 @@ RECIPE_PREFIX="$(awk -F= '/^[[:space:]]*\.RECIPEPREFIX[[:space:]]*[:+]?=/ {
 # dropped: they constrain ordering, not what runs.
 prereqs_of() {
 	awk -v target="$1" -v rp="$RECIPE_PREFIX" '
-		BEGIN { pat = "^" target ":([^=]|$)" }
+		BEGIN { pat = "^" target ":([^=]|$)"; if (rp == "") rp = "\t" }
 		{
 			line = $0
-			if (rp != "" && substr(line, 1, 1) == rp) next
+			# Only the ACTUAL recipe prefix marks a recipe line. Treating any
+			# leading whitespace as one loses a rule that is merely indented,
+			# which under a non-tab .RECIPEPREFIX is perfectly legal make and
+			# collapses the whole closure to a single target. A continuation is
+			# exempt: under the default tab prefix a wrapped prerequisite list is
+			# normally tab-indented.
+			if (!cont && substr(line, 1, 1) == rp) next
+			sub(/^[[:space:]]+/, "", line)
 			if (cont) {
 				buf = buf " " line
 				if (line ~ /\\[[:space:]]*$/) next
@@ -148,7 +155,6 @@ prereqs_of() {
 				emit(buf)
 				exit
 			}
-			if (line ~ /^[[:space:]]/) next
 			if (line !~ pat) next
 			buf = line
 			if (line ~ /\\[[:space:]]*$/) { cont = 1; next }
@@ -169,9 +175,10 @@ prereqs_of() {
 # Is this name an explicit rule in the Makefile?
 is_makefile_target() {
 	awk -v target="$1" -v rp="$RECIPE_PREFIX" '
-		BEGIN { pat = "^" target ":([^=]|$)"; found = 0 }
-		rp != "" && substr($0, 1, 1) == rp { next }
-		$0 ~ pat && $0 !~ /^[[:space:]]/ { found = 1; exit }
+		BEGIN { pat = "^" target ":([^=]|$)"; if (rp == "") rp = "\t"; found = 0 }
+		substr($0, 1, 1) == rp { next }
+		{ line = $0; sub(/^[[:space:]]+/, "", line) }
+		line ~ pat { found = 1; exit }
 		END { exit found ? 0 : 1 }
 	' Makefile
 }
