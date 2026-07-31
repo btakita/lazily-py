@@ -42,14 +42,75 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
-      # All four conformance guards run from this one step (#lzguardsnotinci):
+      # The steps below are `poe precommit` unrolled, one step per gate that
+      # `make check` runs, in the same order (#lzcheckcireachguard). Same work,
+      # same commands, no aggregate wrapper.
+      #
+      # `poe precommit` as a single step was correct about WHAT had to run and
+      # opaque about WHETHER it did. Two of `make check`'s gates — `ruff format`
+      # and a non-fixing `ruff check` — were not in that list at all, and nothing
+      # in this file said so: the step name still read "Run poe precommit" and
+      # still went green. That is the same failure as #lzguardsnotinci and
+      # #lzinteroppeerci one level up, and it is why check-ci-reach.sh compares
+      # this workflow's run: bodies against the Makefile closure instead of
+      # trusting a name.
+      #
+      # All four conformance guards still run, now visibly:
       #   rung 1  runtime fixture manifest / coverage   poe conformance_coverage
       #   rung 2  unconsumed assertion key              pytest_sessionfinish
       #   rung 3  read-but-unasserted assertion key     pytest_sessionfinish
       #   rung 4  unreplayed fixture scenario           pytest_sessionfinish
-      # Rung 1 previously ran only from `make check` on a developer's machine, so
-      # CI could not have caught a fixture the suite stopped opening. Keep the
-      # ladder wired to `poe precommit` — a guard invoked from the Makefile alone
-      # is a guard this workflow does not run.
-      - name: Run poe precommit
-        run: uv run poe precommit
+      # Rungs 2-4 live inside the test binary, so the `poe test` step carries
+      # them. Add any new gate to `make check` AND here, or the reachability
+      # guard at the bottom of this job fails the run.
+
+      # `make format` REWRITES; in CI that would pass unconditionally and prove
+      # nothing, so run the same formatter in --check mode. Same anchor, honest
+      # verdict.
+      - name: Format (make format)
+        run: uv run ruff format --check src/lazily/ tests/
+
+      # --no-fix for the same reason: pyproject sets `[tool.ruff] fix = true`, so
+      # a bare `ruff check` in CI would silently repair the tree it is supposed
+      # to be judging and exit 0.
+      - name: Lint (make lint)
+        run: uv run ruff check --no-fix src/lazily/ tests/
+
+      - name: Type check (make type-check)
+        run: uv run poe ty
+
+      # Not part of `make check`, but part of the old `poe precommit` list —
+      # keep it running rather than losing it in the unroll.
+      - name: README examples
+        run: uv run poe run_readme
+
+      # Truncate the fixture manifest before the suite appends to it. A manifest
+      # left over from an earlier step would credit this run with fixtures it
+      # never opened, which is the one file rung 1 treats as evidence.
+      - name: Test (make test)
+        run: |
+          uv run poe conformance_manifest
+          uv run poe test
+
+      - name: Conformance coverage guard (make conformance-coverage)
+        run: uv run poe conformance_coverage
+
+      # The cross-binding wire-compatibility peer (#lzinteroppeerci). Nine
+      # bindings have to agree on a byte layout; a gate that only ever executes
+      # on a laptop is how they quietly stop agreeing.
+      - name: Interop peer self-check (make test-interop-peer)
+        run: uv run poe interop_peer
+
+      # The gate that keeps every step above honest (#lzcheckcireachguard). It
+      # compares `make check`'s prerequisite closure against the run: bodies in
+      # this file and fails on any target CI does not reach. Comments inside run:
+      # bodies are stripped first — a naive grep for "make check" reported all
+      # nine bindings as covered and every one of those hits was a comment.
+      - name: CI-reachability guard (#lzcheckcireachguard)
+        run: |
+          out=$(./scripts/check-ci-reach.sh 2>&1) || { echo "$out"; echo "::error::a make check gate is unreachable from CI"; exit 1; }
+          echo "$out"
+          echo "$out" | grep -q "check-ci-reach: OK" || {
+            echo "::error::the CI-reachability guard exited 0 without reaching its verdict"
+            exit 1
+          }

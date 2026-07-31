@@ -1,4 +1,4 @@
-.PHONY: init build test lint format type-check clean publish-test publish bench bench-scale compile conformance-coverage
+.PHONY: init build test lint format type-check clean publish-test publish bench bench-scale compile conformance-coverage ci-reach
 
 # Install development dependencies and package in editable mode
 init: PY_VERSION = $(shell [ -f .python-version ] && \
@@ -60,7 +60,7 @@ type-check:
 test-interop-peer:
 	uv run poe interop_peer
 
-check: format lint type-check test conformance-coverage test-interop-peer
+check: format lint type-check test conformance-coverage test-interop-peer ci-reach
 
 # Run the micro-benchmark suite (see BENCHMARKS.md)
 bench:
@@ -97,3 +97,13 @@ publish: build
 # replaying — see the script header for what this does and does not prove.
 conformance-coverage:
 	uv run poe conformance_coverage
+
+# CI-reachability guard (#lzcheckcireachguard). Fails when a target above runs a
+# gate no CI workflow step reaches — the drift that hid #lzinteroppeerci in every
+# binding for months. In this binding it also catches a second shape of the same
+# problem: a workflow that runs one opaque aggregate command, under which a gate
+# can quietly stop running without any step name changing. It guards itself:
+# `ci-reach` is in `check`, so CI has to run it too or this target reports itself
+# missing.
+ci-reach:
+	./scripts/check-ci-reach.sh
