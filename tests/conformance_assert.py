@@ -87,12 +87,11 @@ stays silent for :data:`SCENARIO_LABEL_KEYS` (``id``, ``name``, …), which is w
 a skip reads on its way past. Runners that pick a scenario out by name wrap it the
 same way through :func:`scenario_view`.
 
-Ids resolve in one fixed order shared by every binding: ``id``, else ``name``,
-else the positional index spelled ``#<n>``. The corpus is not uniform —
-``collections/mergecell_algebra.json`` carries no identifier at all — so any
-scenario that lands on the positional fallback is *reported* by the guard rather
-than silently accepted. The report is what makes the corpus gap fixable upstream;
-adding the identifiers is a shared-corpus change and does not belong here.
+Ids resolve in one fixed order shared by every binding: ``id``, else ``name``.
+There is no third option (``#lzspecscenarioids``): a positional ``#<n>`` id
+silently rebinds to a different scenario when the corpus array is reordered, so
+an unidentified scenario is a FAILURE rather than a note. lazily-spec's
+``scenario-identity-check`` keeps the corpus side of that invariant.
 
 Verification runs in both directions at session end, like ``KNOWN_UNCOVERED`` and
 like :func:`excuse_key`: a scenario on disk that the run never replayed fails
@@ -547,20 +546,35 @@ def _seed_scenario_excuses() -> None:
 
 
 def scenario_id(scenario: Any, index: int) -> str:
-    """Resolve a scenario's id: ``id``, else ``name``, else positional ``#<n>``.
+    """Resolve a scenario's id: ``id``, else ``name``. There is no third option.
 
-    One fixed order, identical in every binding. The positional fallback exists
-    because the corpus is not uniform — ``collections/mergecell_algebra.json``
-    distinguishes its scenarios only by ``policy`` — and every use of it is
-    reported by :func:`scenario_failures` so the gap stays visible instead of
-    quietly becoming the norm.
+    One fixed order, identical in every binding.
+
+    The positional ``#<n>`` fallback is GONE (``#lzspecscenarioids``). It let the
+    ledger record a scenario BY POSITION, where inserting one ahead of it silently
+    rebinds that entry — and any excuse naming it — to a different scenario, with
+    nothing turning red: the guard compares "index 1 was replayed" against
+    whatever now sits at index 1 and agrees with itself.
+
+    It was load-bearing for exactly one fixture,
+    ``collections/mergecell_algebra.json``, whose scenarios differed only by
+    ``policy``. They carry ids now, and lazily-spec's ``scenario-identity-check``
+    keeps every scenario identified — so this is a hole with no users, which is one
+    waiting to become load-bearing again. A blank identifier is refused for the
+    same reason: it would file every blank-id scenario under one ledger entry,
+    which reads as "replayed" the moment any one of them runs.
     """
     if isinstance(scenario, Mapping):
         for key in ("id", "name"):
             value = scenario.get(key)
-            if isinstance(value, str) and value:
+            if isinstance(value, str) and value.strip():
                 return value
-    return f"#{index}"
+    raise AssertionError(
+        f"scenario at index {index} carries neither `id` nor `name`. The replay "
+        f"ledger would have to record it by POSITION, where inserting a scenario "
+        f"ahead of it silently rebinds that entry to a different scenario. Give it "
+        f"a stable id upstream in lazily-spec (#lzspecscenarioids)."
+    )
 
 
 def record_scenario(fixture: str, scenario: Any, index: int = 0) -> str:
@@ -715,7 +729,13 @@ def corpus_dir() -> Path:
 
 
 def _disk_scenarios(path: Path) -> tuple[list[str], list[str]] | None:
-    """``(ids, positional_ids)`` for a fixture on disk, or ``None`` if it has none."""
+    """``(ids, unidentified)`` for a fixture on disk, or ``None`` if it has none.
+
+    ``unidentified`` names the indices that carry no ``id``/``name``. Those are a
+    corpus defect reported as a FAILURE, never an id to invent
+    (``#lzspecscenarioids``): booking a scenario by POSITION silently rebinds that
+    ledger entry to a different scenario on any corpus reorder.
+    """
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -725,9 +745,14 @@ def _disk_scenarios(path: Path) -> tuple[list[str], list[str]] | None:
     listed = raw.get(SCENARIOS_KEY)
     if not isinstance(listed, list) or not listed:
         return None
-    ids = [scenario_id(scenario, index) for index, scenario in enumerate(listed)]
-    positional = [name for name in ids if name.startswith("#")]
-    return ids, positional
+    ids: list[str] = []
+    unidentified: list[str] = []
+    for index, scenario in enumerate(listed):
+        try:
+            ids.append(scenario_id(scenario, index))
+        except AssertionError:
+            unidentified.append(f"#{index}")
+    return ids, unidentified
 
 
 def scenario_failures(
@@ -741,8 +766,7 @@ def scenario_failures(
     does not open at all is already the coverage guard's verdict, and reporting it
     again here would just name the same gap twice under a weaker rung.
 
-    Notices are not failures. A scenario booked under the positional fallback is
-    reported so the missing identifier upstream stays visible.
+    Notices are not failures; failures are what the caller asserts on.
     """
     root = corpus if corpus is not None else corpus_dir()
     failures: list[str] = []
@@ -768,7 +792,7 @@ def scenario_failures(
                     f"rotted"
                 )
             continue
-        ids, positional = found
+        ids, unidentified = found
         replayed = _REPLAYED.get(fixture, set())
 
         rotted = sorted(set(excused) - set(ids))
@@ -793,12 +817,12 @@ def scenario_failures(
                 f"guard is satisfied and the key guards never saw these blocks — "
                 f"replay them, or declare excuse_scenario(fixture, id, reason)"
             )
-        if positional:
-            notices.append(
-                f"{fixture}: scenario(s) {positional} have neither `id` nor `name` "
-                f"and were booked by position. The ids are stable only as long as "
-                f"the fixture's order is; adding identifiers upstream is a "
-                f"lazily-spec change, not a lazily-py one"
+        if unidentified:
+            failures.append(
+                f"{fixture}: scenario(s) at {unidentified} carry neither `id` nor "
+                f"`name`. The ledger would record them by POSITION, which silently "
+                f"rebinds on a corpus reorder. Give them stable ids upstream in "
+                f"lazily-spec (#lzspecscenarioids)"
             )
 
     return failures, notices

@@ -231,11 +231,26 @@ def _scenario_report(tmp_path: Path, scenario_list: list[dict]) -> list[str]:
 
 
 def test_scenario_id_resolution_order() -> None:
-    """``id`` beats ``name`` beats the positional fallback — in every binding."""
+    """``id`` beats ``name``, and there is no third option — in every binding."""
     assert scenario_id({"id": "a", "name": "b"}, 0) == "a"
     assert scenario_id({"name": "b"}, 0) == "b"
-    assert scenario_id({"policy": "Sum"}, 2) == "#2"
-    assert scenario_id({"name": ""}, 1) == "#1"  # empty is not an identifier
+
+
+def test_scenario_id_refuses_an_unidentified_scenario() -> None:
+    """A positional id silently rebinds on a corpus reorder (#lzspecscenarioids).
+
+    The ledger would record "index 2 was replayed" and the guard would compare it
+    against whatever now sits at index 2 -- the two agree with each other about
+    the wrong scenario, and nothing turns red.
+    """
+    with pytest.raises(AssertionError, match="carries neither `id` nor `name`"):
+        scenario_id({"policy": "Sum"}, 2)
+
+
+def test_scenario_id_refuses_a_blank_identifier() -> None:
+    """A blank id would file every blank-id scenario under one ledger entry."""
+    with pytest.raises(AssertionError, match="carries neither `id` nor `name`"):
+        scenario_id({"name": "", "id": "  "}, 1)
 
 
 def test_scenarios_helper_books_a_scenario_the_body_replays() -> None:
@@ -296,13 +311,18 @@ def test_a_skipped_scenario_is_reported(tmp_path: Path) -> None:
     reset(fixture=_SELFTEST)
 
 
-def test_positional_fallback_is_a_notice_not_a_failure(tmp_path: Path) -> None:
-    record_scenario(_SELFTEST, {"policy": "Sum"}, 0)
-    failures, notices = scenario_failures(
+def test_an_unidentified_corpus_scenario_is_a_failure(tmp_path: Path) -> None:
+    """Not a notice (#lzspecscenarioids). It used to be, and that is the bug.
+
+    A scenario the guard books by POSITION makes every ledger entry for that
+    fixture order-dependent, so a corpus reorder rebinds them all with nothing
+    turning red.
+    """
+    failures, _ = scenario_failures(
         [_SELFTEST], corpus=_corpus(tmp_path, [{"policy": "Sum"}])
     )
-    assert not [line for line in failures if line.startswith(_SELFTEST)]
-    assert notices and "#0" in notices[0]
+    reported = [line for line in failures if line.startswith(_SELFTEST)]
+    assert reported and "carry neither `id` nor `name`" in reported[0]
 
     reset(fixture=_SELFTEST)
 

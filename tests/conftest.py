@@ -135,15 +135,7 @@ def pytest_sessionfinish(session, exitstatus) -> None:  # type: ignore[no-untype
 
     scenario_bad, scenario_notes = scenario_failures(_opened)
     if scenario_notes:
-        report += [
-            "",
-            "CONFORMANCE SCENARIO LEDGER NOTICES (#lzscenariocoverage)",
-            "  Scenario id resolved by POSITION because the fixture carries neither",
-            "  `id` nor `name`. Booked, not failed — the fallback is what keeps this",
-            "  guard from being blocked on a shared-corpus edit — but the ids are",
-            "  only as stable as the fixture's ordering.",
-            "",
-        ]
+        report += ["", "CONFORMANCE SCENARIO LEDGER NOTICES (#lzscenariocoverage)", ""]
         report += [f"  {line}" for line in scenario_notes]
         report.append("")
     if scenario_bad:
@@ -155,7 +147,10 @@ def pytest_sessionfinish(session, exitstatus) -> None:  # type: ignore[no-untype
             "  replaying it: the coverage guard sees one scenario and is satisfied,",
             "  and the key guards never bind a block nobody reaches. Replay the",
             "  scenario, or declare excuse_scenario(fixture, id, reason) next to",
-            "  KNOWN_UNCOVERED in scripts/check-conformance-coverage.sh.",
+            "  KNOWN_UNCOVERED in scripts/check-conformance-coverage.sh. A scenario",
+            "  carrying neither `id` nor `name` is reported here too: the ledger",
+            "  would record it by POSITION, which silently rebinds on a corpus",
+            "  reorder (#lzspecscenarioids).",
             "",
         ]
         report += [f"  {line}" for line in scenario_bad]
