@@ -94,8 +94,32 @@ class LazilyFfiBytes(ctypes.Structure):
 
 
 def kind_of(message: IpcMessage) -> LazilyFfiMessageKind:
-    """The FFI message-kind discriminator for an :class:`IpcMessage`."""
-    wire = message.to_wire()
+    """The FFI message-kind discriminator for an :class:`IpcMessage`.
+
+    **Deliberate leniency.** An envelope tag this build has no arm for returns
+    :attr:`LazilyFfiMessageKind.Unknown` rather than raising, because this
+    function is called on the C ABI side of the boundary where a Python
+    exception cannot cross. ``Unknown`` is not a silent default: it is a
+    *reported* one — :func:`encode_message` refuses any message whose kind is
+    ``Unknown`` with :attr:`LazilyFfiStatus.InvalidMessage` and an empty
+    payload, so the leniency here converts an unrepresentable value into a
+    status code instead of an unwinding exception, and never into a
+    misclassified message.
+
+    The ``to_wire()`` call is guarded because it is itself fail-closed: an
+    ``IpcMessage`` with every variant slot unset raises ``ValueError`` there,
+    which made the ``Unknown`` return below unreachable and the
+    ``InvalidMessage`` guard in :func:`encode_message` dead code — so
+    ``encode_message`` on such a message raised straight through the boundary it
+    documents as never raising. Catching it here is what makes the documented
+    status path real.
+
+    Pinned by ``tests/test_library_leniency.py``.
+    """
+    try:
+        wire = message.to_wire()
+    except ValueError:
+        return LazilyFfiMessageKind.Unknown
     if "Snapshot" in wire:
         return LazilyFfiMessageKind.Snapshot
     if "Delta" in wire:
@@ -136,7 +160,18 @@ def decode_message(payload: bytes) -> tuple[LazilyFfiStatus, IpcMessage | None]:
     ``(status, message)``. ``status`` is :attr:`LazilyFfiStatus.Ok` on success,
     :attr:`LazilyFfiStatus.Empty` if the payload is empty, or
     :attr:`LazilyFfiStatus.InvalidMessage` on a parse failure (never raises
-    across the boundary)."""
+    across the boundary).
+
+    **Deliberate leniency.** The three swallowed exception types are exactly the
+    ways :meth:`IpcMessage.decode_json` reports a bad frame — ``ValueError`` for
+    malformed JSON *and* for an unknown envelope tag, ``KeyError`` for a missing
+    required field, ``TypeError`` for a field of the wrong shape. They are
+    swallowed because the FFI contract is that no Python exception unwinds
+    through the C ABI into a Rust/Zig caller, which would abort the host
+    process. Nothing is defaulted: the message is ``None`` and the caller gets
+    :attr:`LazilyFfiStatus.InvalidMessage`, which is a rejection, not an
+    acceptance. Pinned by ``tests/test_library_leniency.py``.
+    """
     if not payload:
         return LazilyFfiStatus.Empty, None
     try:

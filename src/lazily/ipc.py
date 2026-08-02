@@ -263,8 +263,20 @@ class BlobBackendKind(Enum):
     def from_wire(cls, value: str) -> BlobBackendKind:
         """Parse a backend discriminator from its wire string.
 
-        Unknown strings fall back to :attr:`SHM` (the default) so a legacy or
-        forward-compatible descriptor never hard-fails resolution.
+        **Deliberate leniency.** ``backend`` is omitted when it is the default
+        (see :meth:`is_default`), so a legacy producer that predates the field
+        and a future producer that names a backend this build has never heard of
+        are indistinguishable to a decoder: both present as "no usable backend
+        token". The wire contract is that the *descriptor body* — arena offset,
+        length, generation, epoch, checksum — is backend-independent, so
+        resolving an unknown token as :attr:`SHM` reads the same bytes the
+        legacy form would. The consequence of the default is bounded: the
+        descriptor resolves through the shm arena, and if the producer really
+        meant a backend with different resolution semantics the read either
+        fails its checksum or the epoch check and returns ``None``. It never
+        silently yields the wrong bytes.
+
+        Pinned by ``tests/test_library_leniency.py``.
         """
         try:
             return cls(value)
@@ -1685,6 +1697,32 @@ class CapabilityHandshake:
 
     @classmethod
     def from_wire(cls, d: dict[str, Any]) -> CapabilityHandshake:
+        """Decode a handshake frame.
+
+        **Deliberate leniency on the three optional fields.** The identity
+        fields (``protocol_id``, ``protocol_major_version``, ``codec``,
+        ``max_frame_size``, ``peer_id``, ``session_id``) are required and a
+        missing one raises ``KeyError``; the capability fields are optional
+        because the handshake exists to let two builds of different ages agree,
+        and a peer that predates a capability cannot name it. The defaults are
+        each the conservative reading of silence:
+
+        * ``fragmentation_supported`` defaults to **False** — a peer that never
+          claimed fragmentation is assumed unable to reassemble, so this side
+          keeps every frame under ``max_frame_size``.
+        * ``ordered_reliable`` defaults to **True** — the base transport
+          contract, the assumption every pre-capability peer was written under.
+          A peer running an unordered transport must say so.
+        * ``features`` defaults to **empty** — an unnamed feature is an ungated
+          feature, and every feature-gated plane (e.g.
+          ``lazily.command.COMMAND_PLANE_FEATURE``) refuses to run without its
+          token.
+
+        Unknown *extra* keys are ignored for the same reason: a newer peer may
+        advertise capabilities this build has no arm for, and refusing the
+        handshake over them would make every capability addition a breaking
+        change. Pinned by ``tests/test_library_leniency.py``.
+        """
         return cls(
             protocol_id=d["protocol_id"],
             protocol_major_version=d["protocol_major_version"],

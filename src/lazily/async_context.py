@@ -867,8 +867,14 @@ class AsyncTeardownScope:
                 await node.dispose_async()
             elif isinstance(node, AsyncSource):
                 ctx.dispose_source(node)
-            else:
+            elif isinstance(node, AsyncComputed):
                 ctx.dispose_computed(node)
+            else:
+                # `adopt()` is generic, so anything can be handed to a scope.
+                # The old `else` ran the AsyncComputed arm on it: a non-node
+                # member was "disposed" by a code path that reads private slot
+                # fields, and a scope that owned one silently leaked it.
+                raise TypeError(f"scope member is not an async reactive node: {node!r}")
 
     async def __aenter__(self) -> AsyncTeardownScope:
         return self

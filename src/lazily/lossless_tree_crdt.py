@@ -1028,7 +1028,12 @@ class LosslessTreeCrdt:
                     and self._frontier.contains(prev_right)
                 )
             case _:
-                return False
+                # `TreeOpKind` is a closed six-variant union and `_kind_from_dict`
+                # already rejects an unknown wire tag, so nothing else can reach
+                # here. Returning False instead re-buffered the op forever: never
+                # applied, never reported, and the `_buffered` list grows without
+                # bound. Name the offender instead.
+                raise TypeError(f"unknown TreeOp kind: {type(op.kind).__name__}")
 
     # -- internal apply ------------------------------------------------- #
 
@@ -1050,8 +1055,16 @@ class LosslessTreeCrdt:
                 match oseed:
                     case SeedLeaf(kind=lkind):
                         body = _LeafBody(lkind, _seed_to_text(oid.peer, oseed))
+                    case SeedElement(kind=ekind):
+                        body = _ElementBody(ekind)
                     case _:
-                        body = _ElementBody(oseed.kind)
+                        # `NodeSeed` is `SeedElement | SeedLeaf`. The wildcard
+                        # used to *run the SeedElement arm*, so any third seed
+                        # shape silently materialised as an element shell and
+                        # the node's text was dropped without a word.
+                        raise TypeError(
+                            f"unknown NodeSeed variant: {type(oseed).__name__}"
+                        )
                 rec = _NodeRecord(
                     id=oid,
                     parent=oparent,
@@ -1080,6 +1093,13 @@ class LosslessTreeCrdt:
                 self._apply_split(node, new, osort, at_char, op_id)
             case MergeLeaves(left=left, right=right):
                 self._apply_merge(left, right, op_id)
+            case _:
+                # A `match` with no wildcard is not exhaustive — it falls
+                # through and does NOTHING. An op of an unknown kind was
+                # recorded into the frontier and log by `_record` while
+                # changing no tree state, which is a silent divergence between
+                # two replicas that both claim to have applied it.
+                raise TypeError(f"unknown TreeOp kind: {type(op.kind).__name__}")
 
     def _apply_split(
         self,

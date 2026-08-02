@@ -788,7 +788,7 @@ class SyncDriver:
             elif msg.crdt_sync is not None:
                 # Idempotent anti-entropy plane — the host folds it directly.
                 progress.applied.append(msg)
-            else:
+            elif msg.snapshot is not None or msg.delta is not None:
                 # Snapshot / Delta → the reliable-sync coordinator.
                 action = self._coordinator.ingest(msg)
                 if action.is_apply:
@@ -804,6 +804,17 @@ class SyncDriver:
                     else:
                         self._stalled_since = now
                 # Ignore → drop.
+            else:
+                # `IpcMessage` is a five-variant externally tagged union and
+                # `IpcMessage.from_wire` already rejects an unknown tag, so the
+                # only value that reaches here is a locally built message with
+                # every variant slot unset. The old `else` fed that empty
+                # message to the reliable-sync coordinator as if it were a
+                # Snapshot/Delta.
+                raise ValueError(
+                    "IpcMessage carries no Snapshot, Delta, CrdtSync, "
+                    "ResyncRequest, nor OutboxAck"
+                )
 
         # 4. advertise our receiver cursor if we applied anything (retry until
         #    sent).

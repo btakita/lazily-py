@@ -324,6 +324,13 @@ class SpillStore[T]:
         """Spill one coalesced window summary to the durable tail. ``APPEND_COMPACT``
         always opens a new page; ``COMPACT_ON_WRITE`` merges into the open page
         until it reaches ``page_size``, then seals it."""
+        if self.mode not in (SpillMode.APPEND_COMPACT, SpillMode.COMPACT_ON_WRITE):
+            # `SpillMode` is a local policy knob, never decoded from a peer, so
+            # an unrecognised mode is a caller defect. The chain below used to
+            # treat "not APPEND_COMPACT" as "COMPACT_ON_WRITE", which would
+            # silently apply merge-on-write semantics to a mode that had not
+            # asked for them.
+            raise ValueError(f"unknown spill mode: {self.mode!r}")
         if self.mode == SpillMode.APPEND_COMPACT:
             self._push_page(window, bytes)
         elif self._open_fill >= self.page_size or not self._pages:

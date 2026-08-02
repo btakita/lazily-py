@@ -132,8 +132,14 @@ class InteropPeer:
             observation = self._timer_step(state, step)
         elif feature == "stdlib_timeout_v1":
             observation = self._timeout_step(state, step)
-        else:
+        elif feature == "stdlib_revision_barrier_v1":
             observation = self._barrier_step(state, step)
+        else:
+            # The old `else` ran the revision-barrier arm for every feature
+            # token that was not one of the first two, so a peer stepping a
+            # feature this build does not implement got barrier observations
+            # back under that feature's name and read as conforming.
+            raise ValueError(f"unsupported feature: {feature!r}")
         state["last"] = observation
         return {"ok": True, "feature": feature, "observation": observation}
 
@@ -198,11 +204,18 @@ class InteropPeer:
         def operation() -> TimeoutOperation[str]:
             nonlocal operation_calls
             operation_calls += 1
-            if step["operation"] == "completed":
+            outcome = step["operation"]
+            if outcome == "completed":
                 return TimeoutOperation.completed(step.get("value", ""))
-            if step["operation"] == "unavailable":
+            if outcome == "unavailable":
                 return TimeoutOperation.unavailable()
-            return TimeoutOperation.pending()
+            if outcome == "pending":
+                return TimeoutOperation.pending()
+            # `operation` is a three-value fixture discriminator. The fallthrough
+            # used to *be* the `pending` arm, so a fixture typo or a fourth
+            # outcome this build does not know produced a green "pending" run
+            # against an assertion nobody wrote.
+            raise ValueError(f"unknown timeout operation outcome: {outcome!r}")
 
         def cancellation() -> str:
             nonlocal cancellation_calls

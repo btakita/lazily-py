@@ -167,6 +167,24 @@ def _parse_state(id: str, raw: object) -> _StateDef:
         kind = "compound"
         history = None
     else:
+        # **Deliberate leniency.** A state's kind is not a wire enum — it is
+        # *derived* from which structural markers the object carries
+        # (`history`, `parallel: true`, `kind: "final"`, `initial`). A chart
+        # authored against a newer spec may carry markers this build has no arm
+        # for, and an author may also write `kind: "atomic"` explicitly or write
+        # nothing at all; all three present here as "no marker I recognise".
+        # Atomic is the correct reading of silence: it is the leaf case, and the
+        # spec defines a state with no children and no initial child as atomic.
+        #
+        # Consequence, stated: an unrecognised marker makes the state a LEAF.
+        # `_enter_subtree` will not descend into it and `is_leaf` reports True,
+        # so the chart runs with that subtree collapsed rather than refusing to
+        # load. That is the deliberate trade — a partially-understood chart
+        # still transitions — and it is why the *closed* vocabularies here do
+        # fail closed instead: an unknown `history` value raises above, and
+        # `_parse_transition` rejects unknown transition fields.
+        #
+        # Pinned by `tests/test_library_leniency.py`.
         kind = "atomic"
         history = None
 
@@ -262,6 +280,27 @@ class ChartDef:
         return ChartDef(states, children, order, depth, root)
 
     def kind(self, id: str) -> str:
+        """The kind of state ``id``, or ``"atomic"`` when ``id`` is not declared.
+
+        **Deliberate leniency.** Transition targets are free-form strings on the
+        wire and are never cross-checked against the state table at parse time,
+        so a chart authored against a larger state set — or one whose target
+        names a state a later revision adds — can reference an id this
+        ``ChartDef`` does not hold. Treating an undeclared id as an atomic leaf
+        keeps the machine running: the transition fires, the id enters the
+        configuration, and it simply has no children to descend into and no
+        entry/exit actions to run (`_enter_subtree` returns early on the same
+        missing lookup). Refusing instead would turn one unknown target into a
+        dead chart.
+
+        Consequence, stated: a *typo* in a target id is indistinguishable from a
+        forward reference and is accepted the same way, landing the machine in a
+        state with no behaviour rather than reporting the typo. Callers that
+        need the stricter reading should validate targets against
+        :attr:`states` before running the chart.
+
+        Pinned by ``tests/test_library_leniency.py``.
+        """
         defn = self.states.get(id)
         return defn.kind if defn is not None else "atomic"
 
@@ -364,6 +403,22 @@ class _Recording:
 
 
 def _guard_passes(transition: _Transition, guards: Mapping[str, bool]) -> bool:
+    """Whether ``transition``'s guard admits it under ``guards``.
+
+    **Deliberate leniency, in the fail-closed direction.** Guard names come from
+    the chart JSON; the ``guards`` mapping comes from the host. The two are
+    authored separately and lazily never resolves a guard to code, so a chart
+    naming a guard the host did not supply is an ordinary interop state, not
+    corruption. An absent guard evaluates **False**, so the transition does NOT
+    fire — the unknown value denies rather than admits.
+
+    Consequence, stated: a host that misspells a guard key silently loses that
+    transition instead of being told. That is the deliberate direction — a
+    statechart that refuses to move is recoverable, one that moves on an
+    unevaluated guard is not — and it is why this default is False and not True.
+
+    Pinned by ``tests/test_library_leniency.py``.
+    """
     if transition.guard is None:
         return True
     return guards.get(transition.guard, False)  # fail-closed

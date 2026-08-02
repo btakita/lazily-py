@@ -585,8 +585,15 @@ class IngressChange[K]:
             self.accepted_receipts = True
         elif channel == IngressReceiptChannel.DROPPED:
             self.dropped_receipts = True
-        else:
+        elif channel == IngressReceiptChannel.ERROR:
             self.error_receipts = True
+        else:
+            # `IngressReceiptChannel` is produced only inside this package, so a
+            # value outside the three-member enum is a defect here, not a peer
+            # sending something newer. The old `else` ran the ERROR arm, which
+            # would have misrouted a fourth channel into the supervisor's reader
+            # and dirtied it on every transition.
+            raise ValueError(f"unknown ingress receipt channel: {channel!r}")
 
 
 # -- The read-only projection every derive is computed from ------------------
