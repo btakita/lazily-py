@@ -15,15 +15,24 @@
 # A missing manifest is missing EVIDENCE and fails. It does not mean "no fixtures
 # were read"; it means the suite ran without the recorder attached, and passing in
 # that state is the vacuous green this guard exists to prevent.
+#
+# The same reasoning is why this script ends with a positive-evidence FLOOR
+# (#lzvacuousrun). Every check between here and there is a statement about the
+# fixtures the run opened, and every one of them is trivially satisfied when that
+# set is empty. Reporting "coverage OK" after examining zero fixtures is the
+# failure mode, not a degenerate case of success, so the magnitude is asserted
+# before OK is printed.
 set -euo pipefail
 
 SPEC_DIR="${LAZILY_SPEC_CONFORMANCE_DIR:-../lazily-spec/conformance}"
 if [ ! -d "$SPEC_DIR" ]; then
   # Skipping is right for a local checkout without the sibling clone, and wrong
-  # everywhere the run is supposed to PROVE something. On CI (or with
-  # LAZILY_CONFORMANCE_REQUIRE_CORPUS=1) an absent corpus is the vacuous green
-  # this whole ladder exists to reject: nothing was compared, and a skip that
-  # exits 0 reports that as success.
+  # everywhere the run is supposed to PROVE something (#lzvacuousrun). On CI (or
+  # with LAZILY_CONFORMANCE_REQUIRE_CORPUS=1) an absent corpus is the vacuous
+  # green this whole ladder exists to reject: every rung below reasons about
+  # fixtures the run OPENED, so an absent corpus reports OK over nothing at all.
+  # Under CI that is missing EVIDENCE, not evidence of absence — the checkout is
+  # wrong, not the corpus.
   if [ -n "${CI:-}" ] || [ -n "${LAZILY_CONFORMANCE_REQUIRE_CORPUS:-}" ]; then
     echo "::error::canonical corpus not found at $SPEC_DIR — the coverage guard would" >&2
     echo "         compare against nothing and pass vacuously. Clone lazily-spec as a" >&2
@@ -31,6 +40,7 @@ if [ ! -d "$SPEC_DIR" ]; then
     exit 1
   fi
   echo "SKIP: canonical corpus not found at $SPEC_DIR (clone the lazily-spec sibling)" >&2
+  echo "      Local checkout only — this would be a hard failure under CI." >&2
   exit 0
 fi
 
@@ -90,7 +100,12 @@ while IFS= read -r fixture; do
     continue
   fi
   excused=0
-  for known in "${KNOWN_UNCOVERED[@]:-}"; do
+  # `[@]+...`, not `[@]:-`. Under `set -u` an EMPTY array spelled `"${a[@]:-}"`
+  # expands to one EMPTY STRING rather than to nothing, so emptying the allowlist
+  # — which is the goal state, "shrinking this list is the work" — injects a
+  # phantom entry `''` into both loops. Here it is only a wasted comparison; in
+  # the stale-allowlist loop below it hard-fails every run.
+  for known in ${KNOWN_UNCOVERED[@]+"${KNOWN_UNCOVERED[@]}"}; do
     if [ "$known" = "$fixture" ]; then excused=1; break; fi
   done
   if [ "$excused" -eq 0 ]; then
@@ -114,7 +129,7 @@ done < <(cd "$SPEC_DIR" && find . -name '*.json' | sed 's|^\./||' | sort)
 # The covered-check above and the stale-check below use the SAME comparison
 # (`grep -qxF` against "$OPENED") so the two can never disagree about whether a
 # given fixture was opened.
-for known in "${KNOWN_UNCOVERED[@]:-}"; do
+for known in ${KNOWN_UNCOVERED[@]+"${KNOWN_UNCOVERED[@]}"}; do
   if [ ! -f "$SPEC_DIR/$known" ]; then
     echo "ERROR: KNOWN_UNCOVERED lists '$known', which is not in the canonical corpus." >&2
     missing=$((missing + 1))
@@ -130,6 +145,34 @@ done
 
 if [ "$missing" -gt 0 ]; then
   echo "conformance coverage FAILED: $missing problem(s)" >&2
+  exit 1
+fi
+
+# ---- Positive-evidence floor (#lzvacuousrun) ----
+# Everything above reasons about fixtures this run OPENED, so all of it is
+# vacuously satisfied by an empty population: zero fixtures means zero uncovered
+# fixtures and zero stale excuses. The loops cannot distinguish "nothing is
+# wrong" from "nothing was examined", so assert the MAGNITUDE explicitly before
+# reporting OK. Do not lower these to fix a red run — a drop here means the
+# corpus or the recorder shrank, which is the finding.
+#
+# MIN_FIXTURES is calibrated slightly below the real current number (134 of 138
+# canonical fixtures opened, 4 known-uncovered) so ordinary corpus churn does not
+# trip it while a collapse does. The env override exists for bisecting an
+# upstream corpus change, not for making a red run green.
+MIN_FIXTURES="${MIN_FIXTURES:-130}"
+if [ "$total" -eq 0 ]; then
+  echo "ERROR: the corpus at $SPEC_DIR listed ZERO fixtures." >&2
+  echo "       Every check above is vacuously green over an empty population:" >&2
+  echo "       no fixture can be uncovered when there are no fixtures. The" >&2
+  echo "       directory exists but holds no *.json — wrong path or wrong" >&2
+  echo "       checkout (#lzvacuousrun)." >&2
+  exit 1
+fi
+if [ "$covered" -lt "$MIN_FIXTURES" ]; then
+  echo "ERROR: only $covered distinct canonical fixtures were OPENED, expected >= $MIN_FIXTURES." >&2
+  echo "       A replay was removed, renamed, or short-circuited, or the recorder" >&2
+  echo "       detached mid-run. Do not lower MIN_FIXTURES to fix this." >&2
   exit 1
 fi
 
