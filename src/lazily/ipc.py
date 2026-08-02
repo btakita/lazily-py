@@ -780,7 +780,15 @@ class NodeSnapshot:
             node=d["node"],
             type_tag=d["type_tag"],
             state=NodeState.from_wire(d["state"]),
-            key=NodeKey.from_wire(d["key"]) if "key" in d else None,
+            # Omit-when-absent is an ENCODER rule (protocol.md § NodeKey,
+            # ``#lzkeynullstrict``). A conforming peer may still send an explicit
+            # ``key: null`` — a serde-based encoder that simply did not apply
+            # ``skip_serializing_if`` does exactly that — so a decoder MUST read
+            # both forms as absent. ``"key" in d`` was true for the null form and
+            # sent ``None`` into ``NodeKey.from_wire``, which raised. Note
+            # :meth:`CrdtOp.from_wire` one field over already reads it correctly,
+            # because a ``CrdtOp`` ALWAYS writes ``key: null`` when unset.
+            key=NodeKey.from_wire(d["key"]) if d.get("key") is not None else None,
         )
 
 
@@ -908,7 +916,10 @@ class DeltaOp:
                 body["node"],
                 body["type_tag"],
                 NodeState.from_wire(body["state"]),
-                NodeKey.from_wire(body["key"]) if "key" in body else None,
+                # Same leniency as ``NodeSnapshot.from_wire`` (``#lzkeynullstrict``):
+                # omit-when-absent binds the encoder, so an explicit ``key: null``
+                # reads as absent rather than raising.
+                NodeKey.from_wire(body["key"]) if body.get("key") is not None else None,
             )
         if tag == "NodeRemove":
             return DeltaOp_NodeRemove(body["node"])
