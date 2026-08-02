@@ -81,7 +81,12 @@ def _reencoded_node(scenario, message: IpcMessage) -> dict:
 
     if scenario["field"] == "snapshot":
         return wire["Snapshot"]["nodes"][0]
-    return wire["Delta"]["ops"][0]["NodeAdd"]
+    if scenario["field"] == "node_add":
+        return wire["Delta"]["ops"][0]["NodeAdd"]
+    # `node_add` used to be the unnamed fallthrough: a scenario naming any other
+    # field was read out of the Delta op regardless, and its leniency
+    # expectations checked against the wrong node (#lzscenariobodyskip).
+    raise AssertionError(f"unknown nodekey field {scenario['field']!r}")
 
 
 def _decoded_key(scenario, message: IpcMessage) -> str | None:

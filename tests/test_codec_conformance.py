@@ -184,6 +184,16 @@ def _assert_msgpack_encoding(block: TrackedBlock, variant: str, encoded: bytes) 
         # because an anti-entropy op's addressing is part of its merge identity.
         assert_key(block, "first_op_encoded_field_names", sorted(body["ops"][0]))
         assert_key(block, "second_op_encoded_field_names", sorted(body["ops"][1]))
+    elif variant == "Delta":
+        # A `Delta` frame pins no per-element encoded field set: its ops are
+        # externally tagged variants, checked as decoded values by
+        # `_assert_delta`. Named explicitly rather than left to fall off the end
+        # of the chain, so a variant the corpus grows lands in the `else` below
+        # instead of silently receiving no encoding assertion at all
+        # (#lzscenariobodyskip).
+        pass
+    else:
+        raise AssertionError(f"unknown frame variant {variant!r}")
 
 
 def _replay(

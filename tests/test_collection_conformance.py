@@ -216,6 +216,12 @@ class _Replicas:
                     continue
                 self._op(target, st)
                 continue
+            # A step shape this interpreter does not recognize used to fall off
+            # the end of the chain and be skipped in silence, while the scenario
+            # ledger still booked the scenario as replayed — the fixture named
+            # behaviour this runner never performed and reported green
+            # (#lzscenariobodyskip).
+            raise AssertionError(f"unrecognized textcrdt step shape {sorted(st)!r}")
 
     def _op(self, target: TextCrdt, st: dict) -> None:
         op = st["op"]
@@ -225,6 +231,11 @@ class _Replicas:
             target.insert_str(st["index"], st["str"])
         elif op == "delete":
             target.delete(st["index"])
+        else:
+            # No final `else` here meant an op name this interpreter does not
+            # implement silently did nothing, and the convergence assertions
+            # still ran against the un-mutated replica (#lzscenariobodyskip).
+            raise AssertionError(f"unknown textcrdt op {op!r}")
 
 
 def test_textcrdt_convergence_conformance() -> None:
@@ -320,6 +331,12 @@ def test_textcrdt_delta_sync_conformance() -> None:
             if "on" in st:
                 interp._op(interp.r[st["on"]], st)
                 continue
+            # Fail closed: an unrecognized step shape used to be skipped in
+            # silence while the ledger booked the scenario as replayed
+            # (#lzscenariobodyskip).
+            raise AssertionError(
+                f"unrecognized textcrdt delta-sync step shape {sorted(st)!r}"
+            )
         exp = sc["expect"]
         name = sc["name"]
         if "texts_equal" in exp:
@@ -385,6 +402,11 @@ class _SeqReplicas:
                 target = self.r.get("a")
                 if target is not None:
                     self._op(target, st)
+                continue
+            # Fail closed on a step shape this interpreter does not recognize:
+            # falling off the chain skipped the step in silence while the
+            # scenario ledger booked it as replayed (#lzscenariobodyskip).
+            raise AssertionError(f"unrecognized seqcrdt step shape {sorted(st)!r}")
 
     def _op(self, target: SeqCrdt, st: dict) -> None:
         op = st["op"]
@@ -398,6 +420,11 @@ class _SeqReplicas:
             target.set_value(st["id"], st["value"], st["now"])
         elif op == "remove":
             target.remove(st["id"], st["now"])
+        else:
+            # Without this arm an op name the interpreter does not implement
+            # silently did nothing and the convergence expectations were
+            # asserted against an un-mutated replica (#lzscenariobodyskip).
+            raise AssertionError(f"unknown seqcrdt op {op!r}")
 
 
 def test_seqcrdt_convergence_conformance() -> None:

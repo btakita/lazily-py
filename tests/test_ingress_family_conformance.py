@@ -157,7 +157,12 @@ def _policy_of(raw: dict[str, Any]) -> lazily.IngressPolicy:
 
 def _merge_of(name: str) -> Any:
     policy = MERGE_POLICIES.get(name)
-    assert policy is not None, f"unknown merge policy {name!r}"
+    if policy is None:
+        # A `dict.get` miss yields `None` and the replay would have carried it
+        # into the cell. The guard was a bare `assert`, which `python -O`
+        # compiles out — the Python analogue of the `NDEBUG` merge-policy
+        # fail-open found in lazily-cpp (#lzscenariobodyskip).
+        raise AssertionError(f"unknown merge policy {name!r}")
     return policy
 
 

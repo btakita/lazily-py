@@ -41,9 +41,13 @@ def replay_timer(steps: list[dict[str, Any]]) -> None:
                 last = {"outcome": "pending", "deadline": timer.deadline}
             except TimerError as error:
                 last = {"outcome": "unavailable", "reason": error.reason}
-        else:
+        elif step["op"] == "observe":
             assert timer is not None
             last = clean(timer.observe(step["now"]))
+        else:
+            # `observe` used to be the unnamed `else`, so any op the corpus grows
+            # would have been replayed as an observe (#lzscenariobodyskip).
+            raise AssertionError(f"unknown timer op {step['op']!r}")
         assert last == step["expect"]
 
 
@@ -56,7 +60,7 @@ def replay_timeout(steps: list[dict[str, Any]]) -> None:
                 actual = {"outcome": "pending", "deadline": timeout.deadline}
             except TimerError as error:
                 actual = {"outcome": "unavailable", "reason": error.reason}
-        else:
+        elif step["op"] == "poll":
             assert timeout is not None
             operation_calls = 0
             cancellation_calls = 0
@@ -75,7 +79,14 @@ def replay_timeout(steps: list[dict[str, Any]]) -> None:
                     return TimeoutOperation.completed(operation_value)
                 if operation_state == "unavailable":
                     return TimeoutOperation.unavailable()
-                return TimeoutOperation.pending()
+                if operation_state == "pending":
+                    return TimeoutOperation.pending()
+                # `pending` used to be the unnamed fallthrough, so a fixture
+                # naming any other operation state was replayed as a pending
+                # poll and reported green (#lzscenariobodyskip).
+                raise AssertionError(
+                    f"unknown timeout operation state {operation_state!r}"
+                )
 
             def cancellation(cancellation_state: str = cancellation_state) -> str:
                 nonlocal cancellation_calls
@@ -87,6 +98,9 @@ def replay_timeout(steps: list[dict[str, Any]]) -> None:
                 operation_calls=operation_calls,
                 cancellation_calls=cancellation_calls,
             )
+        else:
+            # `poll` used to be the unnamed `else` (#lzscenariobodyskip).
+            raise AssertionError(f"unknown timeout op {step['op']!r}")
         assert actual == step["expect"]
 
 
@@ -118,8 +132,14 @@ def replay_barrier(steps: list[dict[str, Any]]) -> None:
                 value = barrier.advance(step["revision"], step["predicate"])
             elif step["op"] == "dispose":
                 value = barrier.dispose()
-            else:
+            elif step["op"] == "receipt":
                 value = barrier.receipt(step["key"])
+            else:
+                # `receipt` used to be the unnamed `else`: any barrier op the
+                # corpus grows was replayed as a receipt read against
+                # `step["key"]` and its expectation checked against that
+                # unrelated call (#lzscenariobodyskip).
+                raise AssertionError(f"unknown revision-barrier op {step['op']!r}")
         actual = clean(value)
         if step["op"] == "observe":
             actual["cancellation_calls"] = calls

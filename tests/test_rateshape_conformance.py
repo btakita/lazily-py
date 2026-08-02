@@ -102,7 +102,12 @@ def test_debounce() -> None:
         if op["type"] == "input":
             cell.input(op["now"], op["value"])
             return None
-        return cell.tick(op["now"])
+        if op["type"] == "tick":
+            return cell.tick(op["now"])
+        # `tick` used to be the unnamed fallthrough, so an op type this runner
+        # does not implement was replayed as a tick and its `returns` compared
+        # against that unrelated call (#lzscenariobodyskip).
+        raise AssertionError(f"unknown debounce op type {op['type']!r}")
 
     _run(ctx, fx, cell.output, drive)
 
@@ -120,7 +125,10 @@ def _run_throttle(name: str, edge: ThrottleEdge) -> None:
         op = step["op"]
         if op["type"] == "input":
             return cell.input(op["now"], op["value"])
-        return cell.tick(op["now"])
+        if op["type"] == "tick":
+            return cell.tick(op["now"])
+        # `tick` used to be the unnamed fallthrough (#lzscenariobodyskip).
+        raise AssertionError(f"unknown throttle op type {op['type']!r}")
 
     _run(ctx, fx, cell.output, drive)
 
@@ -143,6 +151,10 @@ def test_sample_count() -> None:
     cell: SampleCell[str] = SampleCell(ctx, SampleMode.Count(fx["initial"]["n"]))
 
     def drive(step: dict) -> Any:
+        # This runner read no discriminator at all: every step was driven as an
+        # `input` whatever it claimed to be (#lzscenariobodyskip).
+        if step["op"]["type"] != "input":
+            raise AssertionError(f"unknown sample_count op type {step['op']['type']!r}")
         return cell.input(step["op"]["value"])
 
     _run(ctx, fx, cell.output, drive)
@@ -162,7 +174,10 @@ def test_sample_time() -> None:
         if op["type"] == "input":
             cell.input(op["value"])
             return None
-        return cell.tick(op["now"])
+        if op["type"] == "tick":
+            return cell.tick(op["now"])
+        # `tick` used to be the unnamed fallthrough (#lzscenariobodyskip).
+        raise AssertionError(f"unknown sample_time op type {op['type']!r}")
 
     _run(ctx, fx, cell.output, drive)
 
@@ -182,6 +197,9 @@ def test_probabilistic_sample() -> None:
 
     def drive(step: dict) -> Any:
         op = step["op"]
+        # As above: the discriminator was read by nobody (#lzscenariobodyskip).
+        if op["type"] != "input":
+            raise AssertionError(f"unknown probabilistic_sample op type {op['type']!r}")
         return cell.input_with_draw(op["value"], op["draw"])
 
     _run(ctx, fx, cell.output, drive)

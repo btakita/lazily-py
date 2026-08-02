@@ -50,11 +50,18 @@ def test_signaling_frames_round_trip() -> None:
                 if frame["variant"] == variant:
                     assert decoded.to is not None
                     assert decoded.frm is None
-        else:
+        elif frame["direction"] == "server":
             for variant in ("offer", "answer", "ice", "relay"):
                 if frame["variant"] == variant:
                     assert decoded.frm is not None
                     assert decoded.to is None
+        else:
+            # `server` used to be the unnamed `else`, so a frame carrying any
+            # other direction was checked against the server-forwarded rule
+            # (#lzscenariobodyskip).
+            raise AssertionError(
+                f"{label}: unknown frame direction {frame['direction']!r}"
+            )
         # to/from never both present.
         assert not (decoded.to is not None and decoded.frm is not None)
 

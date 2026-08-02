@@ -246,8 +246,16 @@ def test_resync_gap_converge() -> None:
             requests += 1
             assert res.is_request_snapshot
             assert res.from_epoch == frame["request_from"]
-        else:
+        elif frame["expect_action"] == "Ignore":
             assert res.is_ignore
+        else:
+            # The final arm used to be a bare `else: assert res.is_ignore`, which
+            # ASSUMED the remaining variant instead of naming it: any
+            # `expect_action` the corpus grows would have been silently checked
+            # against `Ignore` and reported green (#lzscenariobodyskip).
+            raise AssertionError(
+                f"unknown resync expect_action {frame['expect_action']!r}"
+            )
         assert coord.last_epoch == frame["last_epoch_after"]
     expect = sc["expect"]
     assert_key(expect, "final_last_epoch", coord.last_epoch)
@@ -472,6 +480,11 @@ def _replay_orset(ops: list[dict]) -> OrSet:
             st.add(op["tag"])
         elif op["op"] == "remove":
             st.remove_observed(op["observed_tags"])
+        else:
+            # No final arm meant an unimplemented op name left the OrSet
+            # untouched and the convergence expectations still passed
+            # (#lzscenariobodyskip).
+            raise AssertionError(f"unknown orset op {op['op']!r}")
     return st
 
 
@@ -583,13 +596,20 @@ def test_liveness_derived_aggregate_converges_under_retry() -> None:
         for op in ops:
             if op["register_kind"] == "orset":
                 open_set.setdefault(op["key"], OrSet()).add(op["tag"])
-            else:
+            elif op["register_kind"] == "lww":
                 pid = int(op["key"].replace("alive/pid", ""))
                 stamp = _stamp(op["stamp"])
                 if pid in alive:
                     alive[pid].set(stamp, op["value"])
                 else:
                     alive[pid] = WireLwwRegister(stamp, op["value"])
+            else:
+                # The `lww` arm used to be a bare `else`, so any register kind
+                # the corpus grows would have been replayed as an LWW register
+                # and reported green (#lzscenariobodyskip).
+                raise AssertionError(
+                    f"unknown liveness register_kind {op['register_kind']!r}"
+                )
         return open_set, alive
 
     r1_open, r1_alive = replay(sc["ops"])

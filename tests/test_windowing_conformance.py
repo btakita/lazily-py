@@ -69,6 +69,12 @@ def _run_count(fx: dict) -> None:
     w: TumblingCountCell[int] = TumblingCountCell(ctx, n, Sum)
     observed = _observer(ctx, w.output_cell())
     for step in fx["steps"]:
+        # This runner reads no discriminator, so every step was pushed whatever
+        # it claimed to be. Name the one op it implements (#lzscenariobodyskip).
+        if step["op"]["type"] != "push":
+            raise AssertionError(
+                f"unknown tumbling-count op type {step['op']['type']!r}"
+            )
         emitted = w.push(step["op"]["value"])
         assert emitted == step["returns"], f"emit mismatch for {step}"
         _check(ctx, observed, step, w.output())
@@ -85,8 +91,13 @@ def _run_time(fx: dict) -> None:
         if op["type"] == "push":
             w.push(now, op["value"])
             emitted = None
-        else:
+        elif op["type"] == "tick":
             emitted = w.tick(now)
+        else:
+            # `tick` used to be the unnamed `else`: an op type this runner does
+            # not implement was replayed as a tick and its `returns` compared
+            # against that unrelated call (#lzscenariobodyskip).
+            raise AssertionError(f"unknown tumbling-time op type {op['type']!r}")
         assert emitted == step["returns"], f"emit mismatch for {step}"
         _check(ctx, observed, step, w.output())
 
@@ -98,6 +109,11 @@ def _run_sliding(fx: dict) -> None:
     w: SlidingCell[int] = SlidingCell(ctx, size, slide, Sum)
     observed = _observer(ctx, w.output_cell())
     for step in fx["steps"]:
+        # As above: the discriminator was read by nobody (#lzscenariobodyskip).
+        if step["op"]["type"] != "push":
+            raise AssertionError(
+                f"unknown sliding-window op type {step['op']['type']!r}"
+            )
         emitted = w.push(step["op"]["value"])
         assert emitted == step["returns"], f"emit mismatch for {step}"
         _check(ctx, observed, step, w.output())
@@ -113,8 +129,11 @@ def _run_session(fx: dict) -> None:
         now = op["now"]
         if op["type"] == "push":
             emitted = w.push(now, op["value"])
-        else:
+        elif op["type"] == "flush":
             emitted = w.flush(now)
+        else:
+            # `flush` used to be the unnamed `else` (#lzscenariobodyskip).
+            raise AssertionError(f"unknown session-window op type {op['type']!r}")
         assert emitted == step["returns"], f"emit mismatch for {step}"
         _check(ctx, observed, step, w.output())
 
