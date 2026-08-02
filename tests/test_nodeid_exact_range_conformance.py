@@ -24,7 +24,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from conformance_assert import TrackedBlock, assert_key, assert_key_with, excuse_key, instrument, scenarios
+from conformance_assert import (
+    TrackedBlock,
+    assert_key,
+    assert_key_with,
+    excuse_key,
+    instrument,
+    scenarios,
+)
 
 from lazily.ipc import IpcMessage, NodeState_Payload
 from lazily.msgpack_codec import msgpack_unpack
@@ -56,7 +63,9 @@ def _decode(scenario) -> IpcMessage:
     if codec == "json":
         return IpcMessage.from_wire(json.loads(scenario["wire_json"]))
     if codec == "msgpack":
-        return IpcMessage.from_wire(msgpack_unpack(bytes.fromhex(scenario["wire_msgpack_hex"])))
+        return IpcMessage.from_wire(
+            msgpack_unpack(bytes.fromhex(scenario["wire_msgpack_hex"]))
+        )
     raise AssertionError(f"unknown codec {codec!r}")
 
 
@@ -98,7 +107,9 @@ def test_nodeid_exact_range_conformance() -> None:
         accepted += 1
 
         snapshot = message.snapshot
-        assert snapshot is not None, f"{scenario['id']}: fixture declares the Snapshot variant"
+        assert snapshot is not None, (
+            f"{scenario['id']}: fixture declares the Snapshot variant"
+        )
         assert scenario["variant"] == "Snapshot"
 
         assert_key(expect, "epoch", snapshot.epoch)
@@ -115,7 +126,9 @@ def test_nodeid_exact_range_conformance() -> None:
         assert_key(expect, "node_id_decimal", str(node.node))
         assert_key(expect, "type_tag", node.type_tag)
         state = node.state
-        assert isinstance(state, NodeState_Payload), "the fixture carries a Payload node state"
+        assert isinstance(state, NodeState_Payload), (
+            "the fixture carries a Payload node state"
+        )
         assert_key(expect, "payload", list(state.data))
         assert len(snapshot.roots) == 1, f"{scenario['id']}: one root"
         assert_key(expect, "root_id_decimal", str(snapshot.roots[0]))
