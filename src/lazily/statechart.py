@@ -33,6 +33,12 @@ __all__ = ["ChartDef", "StateChart"]
 _HISTORY_SHALLOW = "shallow"
 _HISTORY_DEEP = "deep"
 
+#: The closed `kind` vocabulary of `lazily-spec/schemas/statechart.json`, whose
+#: `State` object is `additionalProperties: false`. Omitting `kind` is legal and
+#: means "infer me from the structural markers"; naming a value outside this set
+#: is not, and `_parse_state` refuses it.
+_STATE_KINDS = ("atomic", "compound", "parallel", "history", "final")
+
 
 def _as_object(value: object, label: str) -> dict[str, object]:
     if not isinstance(value, dict):
@@ -148,6 +154,16 @@ def _parse_state(id: str, raw: object) -> _StateDef:
             "(rejecting explicitly per spec)"
         )
 
+    # `kind` is a CLOSED vocabulary, and the schema that closes it is not a wire
+    # schema: `statechart.json` says a chart "is never serialized over IPC/FFI as
+    # a distinct type", so no forward-compatibility argument reaches this field —
+    # there is no future peer whose newer `kind` we must survive, only a chart
+    # this build was handed. Omission is the legal way to say "infer it" and is
+    # handled below; a value outside the enum is a malformed chart and is named.
+    raw_kind = obj.get("kind")
+    if raw_kind is not None and raw_kind not in _STATE_KINDS:
+        raise TypeError(f"state {id}: unknown state kind `{raw_kind}`")
+
     raw_history = obj.get("history")
     if raw_history is not None and not isinstance(raw_history, str):
         raise TypeError(f"state {id}: history must be a string")
@@ -167,21 +183,21 @@ def _parse_state(id: str, raw: object) -> _StateDef:
         kind = "compound"
         history = None
     else:
-        # **Deliberate leniency.** A state's kind is not a wire enum — it is
-        # *derived* from which structural markers the object carries
-        # (`history`, `parallel: true`, `kind: "final"`, `initial`). A chart
-        # authored against a newer spec may carry markers this build has no arm
-        # for, and an author may also write `kind: "atomic"` explicitly or write
-        # nothing at all; all three present here as "no marker I recognise".
-        # Atomic is the correct reading of silence: it is the leaf case, and the
-        # spec defines a state with no children and no initial child as atomic.
+        # **Inference from SILENCE, which is a different fact from an unknown
+        # value.** By the time control reaches here `kind` is either absent or a
+        # member of `_STATE_KINDS` — an unrecognised value was refused above —
+        # so this arm reads only the markers the object carries (`history`,
+        # `parallel: true`, `kind: "final"`, `initial`) and falls back to the
+        # leaf case. That is what `statechart.json` documents for an omitted
+        # `kind`: a state with no children and no initial child is atomic.
         #
-        # Consequence, stated: an unrecognised marker makes the state a LEAF.
+        # The remaining leniency is narrower than it looks: an unrecognised
+        # STRUCTURAL MARKER — an extra key, not a `kind` value — still lands
+        # here and makes the state a LEAF.
         # `_enter_subtree` will not descend into it and `is_leaf` reports True,
         # so the chart runs with that subtree collapsed rather than refusing to
-        # load. That is the deliberate trade — a partially-understood chart
-        # still transitions — and it is why the *closed* vocabularies here do
-        # fail closed instead: an unknown `history` value raises above, and
+        # load. Every *closed* vocabulary in this parser fails closed: an
+        # unknown `kind` and an unknown `history` value both raise above, and
         # `_parse_transition` rejects unknown transition fields.
         #
         # Pinned by `tests/test_library_leniency.py`.

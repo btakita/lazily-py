@@ -156,11 +156,13 @@ fi
 # reporting OK. Do not lower these to fix a red run — a drop here means the
 # corpus or the recorder shrank, which is the finding.
 #
-# MIN_FIXTURES is calibrated slightly below the real current number (134 of 138
+# MIN_FIXTURES is calibrated slightly below the real current number (135 of 139
 # canonical fixtures opened, 4 known-uncovered) so ordinary corpus churn does not
-# trip it while a collapse does. The env override exists for bisecting an
-# upstream corpus change, not for making a red run green.
-MIN_FIXTURES="${MIN_FIXTURES:-130}"
+# trip it while a collapse does. It ratchets UP with coverage — the slack stays
+# fixed at four so a newly replayed fixture cannot be silently dropped again. The
+# env override exists for bisecting an upstream corpus change, not for making a
+# red run green.
+MIN_FIXTURES="${MIN_FIXTURES:-131}"
 if [ "$total" -eq 0 ]; then
   echo "ERROR: the corpus at $SPEC_DIR listed ZERO fixtures." >&2
   echo "       Every check above is vacuously green over an empty population:" >&2

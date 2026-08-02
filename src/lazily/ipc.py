@@ -263,25 +263,34 @@ class BlobBackendKind(Enum):
     def from_wire(cls, value: str) -> BlobBackendKind:
         """Parse a backend discriminator from its wire string.
 
-        **Deliberate leniency.** ``backend`` is omitted when it is the default
-        (see :meth:`is_default`), so a legacy producer that predates the field
-        and a future producer that names a backend this build has never heard of
-        are indistinguishable to a decoder: both present as "no usable backend
-        token". The wire contract is that the *descriptor body* — arena offset,
-        length, generation, epoch, checksum — is backend-independent, so
-        resolving an unknown token as :attr:`SHM` reads the same bytes the
-        legacy form would. The consequence of the default is bounded: the
-        descriptor resolves through the shm arena, and if the producer really
-        meant a backend with different resolution semantics the read either
-        fails its checksum or the epoch check and returns ``None``. It never
-        silently yields the wrong bytes.
+        **Fails closed, naming the token** (``#lzblobbackendstrict``). An
+        ABSENT ``backend`` is the forward-compatibility channel and the only
+        one: the field is omit-when-default (see :meth:`is_default`), so every
+        descriptor minted before it existed arrives with no token at all and
+        :meth:`ShmBlobRef.from_wire` reads that absence as :attr:`SHM`. A
+        PRESENT token outside the enum is a different fact. A new backend
+        enters the protocol by *adding an enum value* — a spec change carrying
+        a fixture (``docs/zero-copy-transport.md`` § Pluggable backends) — so
+        an unrecognised token is a corrupt or non-conforming producer, never a
+        newer peer.
 
-        Pinned by ``tests/test_library_leniency.py``.
+        Normalizing it to :attr:`SHM` would invert the ``resolve_wrong_backend``
+        theorem in that same doc — *a descriptor of one kind never resolves
+        against a different backend's table; receivers route by kind* — because
+        reading an unknown kind as ``shm`` **is** routing a non-shm descriptor
+        into the shm table. That leaves a 64-bit checksum to discharge
+        probabilistically what routing was supposed to guarantee structurally,
+        and ``shm`` is a backend this build really resolves, so a collision
+        returns bytes where a refusal would have been a visible protocol error
+        the peer recovers from by resync.
+
+        Replayed by ``codec/blob_backend_discriminator.json``; pinned by
+        ``tests/test_library_leniency.py``.
         """
         try:
             return cls(value)
         except ValueError:
-            return cls.SHM
+            raise ValueError(f"unknown blob backend: {value!r}") from None
 
     def is_default(self) -> bool:
         """Whether this is the default backend (:attr:`SHM`).
@@ -334,6 +343,10 @@ class ShmBlobRef:
 
     @classmethod
     def from_wire(cls, d: dict[str, Any]) -> ShmBlobRef:
+        # Absence is lenient and presence is strict (``#lzblobbackendstrict``).
+        # A missing `backend` is a pre-field descriptor and reads as SHM; a
+        # present token outside the enum raises, naming it — see
+        # :meth:`BlobBackendKind.from_wire`.
         raw_backend = d.get("backend")
         backend = (
             BlobBackendKind.from_wire(raw_backend)

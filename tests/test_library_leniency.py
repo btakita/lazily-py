@@ -38,7 +38,13 @@ from lazily.ffi import (
 )
 from lazily.ingress_core import IngressChange, IngressReceiptChannel
 from lazily.interop_peer import InteropPeer
-from lazily.ipc import BlobBackendKind, CapabilityHandshake, Delta, IpcMessage
+from lazily.ipc import (
+    BlobBackendKind,
+    CapabilityHandshake,
+    Delta,
+    IpcMessage,
+    ShmBlobRef,
+)
 from lazily.lossless_tree_crdt import ROOT as TREE_ROOT
 from lazily.lossless_tree_crdt import (
     CreateNode,
@@ -57,19 +63,30 @@ from lazily.statechart import ChartDef, StateChart
 # ===========================================================================
 
 
-def test_pin_blob_backend_unknown_wire_token_resolves_as_shm() -> None:
-    """``BlobBackendKind.from_wire`` — an unrecognised backend token reads as
-    :attr:`SHM`, the omit-when-default value.
+def test_pin_blob_backend_omitted_field_reads_as_shm() -> None:
+    """``ShmBlobRef.from_wire`` — an ABSENT ``backend`` reads as :attr:`SHM`.
 
-    A legacy producer that predates the field and a future producer naming a
-    backend this build has never heard of both present as "no usable token", and
-    the descriptor body is backend-independent, so SHM reads the same bytes the
-    legacy form would.
+    This is the forward-compatibility channel and the only one: the field is
+    omit-when-default, so every descriptor minted before it existed has this
+    shape. The leniency is scoped to absence — see
+    :func:`test_reject_unknown_blob_backend_token` for the present-but-unknown
+    case, which is the opposite verdict (``#lzblobbackendstrict``).
     """
-    assert BlobBackendKind.from_wire("quantum-tunnel") is BlobBackendKind.SHM
-    assert BlobBackendKind.from_wire("") is BlobBackendKind.SHM
-    # The known tokens still resolve to themselves — the default is a fallback,
-    # not a blanket.
+    legacy = {
+        "offset": 40,
+        "len": 17,
+        "generation": 2,
+        "epoch": 9,
+        "checksum": 987654321,
+        # no `backend` — this is a pre-field descriptor
+    }
+    ref = ShmBlobRef.from_wire(legacy)
+    assert ref.backend is BlobBackendKind.SHM
+    # And the encoder half: a conforming encoder omits the default, so the
+    # pre-field descriptor round-trips byte-identically.
+    assert ref.to_wire() == legacy
+
+    # The known tokens still resolve to themselves.
     assert BlobBackendKind.from_wire("shm") is BlobBackendKind.SHM
     assert BlobBackendKind.from_wire("arrow") is BlobBackendKind.ARROW
     assert BlobBackendKind.from_wire("in_process") is BlobBackendKind.IN_PROCESS
@@ -105,9 +122,14 @@ def test_pin_capability_handshake_optional_fields_default_conservatively() -> No
             CapabilityHandshake.from_wire(broken)
 
 
-def test_pin_statechart_unrecognised_state_marker_reads_as_atomic() -> None:
-    """``_parse_state`` — a state carrying only markers this build has no arm
-    for is an atomic LEAF, so a partially-understood chart still runs.
+def test_pin_statechart_unrecognised_structural_marker_reads_as_atomic() -> None:
+    """``_parse_state`` — a state whose only unknown is an EXTRA KEY (not a
+    ``kind`` value) is an atomic LEAF, so a partially-understood chart still
+    runs.
+
+    Narrowed from the original pin, which fed ``kind: "hyperstate"``. ``kind``
+    is a closed enum and now fails closed; an unnamed structural marker is the
+    part of this site that stays lenient.
     """
     defn = ChartDef.from_chart(
         {
@@ -115,7 +137,7 @@ def test_pin_statechart_unrecognised_state_marker_reads_as_atomic() -> None:
             "states": {
                 "root": {"initial": "known"},
                 "known": {"parent": "root"},
-                "future": {"parent": "root", "kind": "hyperstate"},
+                "future": {"parent": "root", "hyperstate": True},
             },
         }
     )
@@ -218,6 +240,69 @@ def test_pin_ffi_boundary_reports_unknown_frames_as_status_not_exception() -> No
 # ===========================================================================
 # REJECTIONS — converted fail-open sites. The unknown value must now raise.
 # ===========================================================================
+
+
+def test_reject_unknown_blob_backend_token() -> None:
+    """``BlobBackendKind.from_wire`` used to normalize an unrecognised token to
+    :attr:`SHM` (``#lzblobbackendstrict``).
+
+    That routed a non-shm descriptor into the shm table, which is the exact
+    misroute ``resolve_wrong_backend`` proves cannot happen; the checksum was
+    left to discharge probabilistically what routing guarantees structurally.
+    The error must NAME the token — a decoder that refuses the frame for an
+    unrelated reason implements none of the clause.
+    """
+    with pytest.raises(ValueError, match="unknown blob backend: 'rdma'"):
+        BlobBackendKind.from_wire("rdma")
+    with pytest.raises(ValueError, match="unknown blob backend: ''"):
+        BlobBackendKind.from_wire("")
+
+    # And through the descriptor, which is where a real frame reaches it.
+    with pytest.raises(ValueError, match="rdma"):
+        ShmBlobRef.from_wire(
+            {
+                "offset": 40,
+                "len": 17,
+                "generation": 2,
+                "epoch": 9,
+                "checksum": 987654321,
+                "backend": "rdma",
+            }
+        )
+
+
+def test_reject_unknown_statechart_state_kind() -> None:
+    """``_parse_state``'s else-arm used to swallow an unknown ``kind`` value and
+    call the state atomic, collapsing its subtree instead of refusing the chart.
+
+    ``schemas/statechart.json`` closes ``kind`` to five values and says a chart
+    "is never serialized over IPC/FFI as a distinct type", so no wire
+    forward-compatibility argument reaches the field. Omission still infers.
+    """
+    with pytest.raises(TypeError, match="unknown state kind `hyperstate`"):
+        ChartDef.from_chart(
+            {
+                "initial": "root",
+                "states": {
+                    "root": {"initial": "known"},
+                    "known": {"parent": "root"},
+                    "future": {"parent": "root", "kind": "hyperstate"},
+                },
+            }
+        )
+
+    # Every member of the closed vocabulary still loads, so the check is a
+    # membership test rather than a blanket refusal of the field.
+    for kind in ("atomic", "compound", "parallel", "history", "final"):
+        ChartDef.from_chart(
+            {
+                "initial": "root",
+                "states": {
+                    "root": {"initial": "leaf"},
+                    "leaf": {"parent": "root", "kind": kind},
+                },
+            }
+        )
 
 
 @dataclass(frozen=True)

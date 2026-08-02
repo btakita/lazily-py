@@ -1,0 +1,178 @@
+{
+  "description": "Blob-backend discriminator strictness on decode (protocol.md \u00a7 Zero-copy blob descriptor, `#lzblobbackendstrict`). `backend` is optional and defaults to `shm`, and that OPTIONALITY is the forward-compatibility channel \u2014 it carries every descriptor minted before the field existed. A present value outside the enum is a different fact and gets the opposite answer: the decoder MUST reject the frame and name the token. Audited across nine bindings, which split 5-2 the wrong way while each documented its choice as deliberate; an undocumented default and a deliberate one are indistinguishable from the outside, and so, it turns out, are two deliberate ones pointing in opposite directions.",
+  "protocol_version": 1,
+  "kind": "BlobBackendDiscriminator",
+  "assertions": {
+    "clause": "an OMITTED `backend` MUST decode as `shm`; a PRESENT `backend` outside {shm, arrow, in_process} MUST be rejected, naming the token, and MUST NOT be normalized to `shm` or to any other backend",
+    "required_of_binding": "MUST",
+    "codecs": [
+      "json",
+      "msgpack"
+    ],
+    "backends": [
+      "shm",
+      "arrow",
+      "in_process"
+    ],
+    "outcomes": [
+      "accept",
+      "reject"
+    ],
+    "scenario_count": 8,
+    "wire_encoding": "json scenarios carry `wire_json` as RAW TEXT and msgpack scenarios carry `wire_msgpack_hex` as lowercase hex, so the exact wire form under test \u2014 an ABSENT map entry versus a present short string \u2014 survives into the runner. The reject scenarios additionally CANNOT be carried as a parsed object: `schemas/defs.json` closes `backend` to an enum, so a fixture embedding `\"backend\": \"rdma\"` as structured JSON would fail the corpus's own schema gate. The enum binds a conforming ENCODER; these frames are what a decoder must survive, which is the same split `nodekey_null_leniency.json` makes.",
+    "reject_obligation": "A rejecting binding MUST name the offending token in its error. The failure this pins is not 'the frame was refused' but 'the frame was refused for the stated reason': a decoder that rejects the descriptor because it mis-parsed `checksum` passes a bare is-error assertion while implementing none of the clause. `error_names_token` is the assertion that separates them.",
+    "anti_vacuity": "Three controls, each defeating a different way to pass without implementing the clause. (1) `backend_omitted` forces a real decode \u2014 a runner that reports `shm` without decoding satisfies it only by accident and fails `backend_arrow`. (2) `backend_arrow` forces the field to actually be READ \u2014 a decoder that ignores `backend` entirely and hardcodes `shm` passes the omitted and explicit-shm scenarios and fails here. (3) `backend_shm_explicit` forces the ENCODER half: `reencoded_backend_field_present` is false for shm and true for arrow, so a binding cannot satisfy the clause by round-tripping whatever it received. Without (2) and (3) a decoder that discards the discriminator passes four of six scenarios.",
+    "theorem": "resolve_wrong_backend (docs/zero-copy-transport.md) \u2014 a descriptor of one kind never resolves against a different backend's table, so receivers route by kind. Normalizing an unknown kind to `shm` routes rather than refuses, which is what makes it non-conforming even though the checksum usually hides the consequence.",
+    "generator": "scripts/gen_blob_backend_discriminator_fixture.py"
+  },
+  "scenarios": [
+    {
+      "id": "backend_omitted_json",
+      "name": "backend_omitted_json",
+      "codec": "json",
+      "backend_form": "omitted",
+      "outcome": "accept",
+      "variant": "Delta",
+      "description": "The forward-compatibility channel, and the only one. Every descriptor minted before `backend` existed has this shape, which is why the field is optional and why a decoder MUST read its absence as `shm`. This is also the control that forces a real decode.",
+      "wire_json": "{\"Delta\": {\"base_epoch\": 8, \"epoch\": 9, \"ops\": [{\"SlotValue\": {\"node\": 7, \"payload\": {\"SharedBlob\": {\"offset\": 40, \"len\": 17, \"generation\": 2, \"epoch\": 9, \"checksum\": 987654321}}}}]}}",
+      "expect": {
+        "decoded_backend": "shm",
+        "reencoded_backend_field_present": false,
+        "node": 7,
+        "offset": 40,
+        "len": 17,
+        "generation": 2,
+        "epoch": 9,
+        "checksum": 987654321
+      }
+    },
+    {
+      "id": "backend_omitted_msgpack",
+      "name": "backend_omitted_msgpack",
+      "codec": "msgpack",
+      "backend_form": "omitted",
+      "outcome": "accept",
+      "variant": "Delta",
+      "description": "The forward-compatibility channel, and the only one. Every descriptor minted before `backend` existed has this shape, which is why the field is optional and why a decoder MUST read its absence as `shm`. This is also the control that forces a real decode.",
+      "wire_msgpack_hex": "81a544656c746183aa626173655f65706f636808a565706f636809a36f70739181a9536c6f7456616c756582a46e6f646507a77061796c6f616481aa536861726564426c6f6285a66f666673657428a36c656e11aa67656e65726174696f6e02a565706f636809a8636865636b73756dce3ade68b1",
+      "expect": {
+        "decoded_backend": "shm",
+        "reencoded_backend_field_present": false,
+        "node": 7,
+        "offset": 40,
+        "len": 17,
+        "generation": 2,
+        "epoch": 9,
+        "checksum": 987654321
+      }
+    },
+    {
+      "id": "backend_shm_explicit_json",
+      "name": "backend_shm_explicit_json",
+      "codec": "json",
+      "backend_form": "shm",
+      "outcome": "accept",
+      "variant": "Delta",
+      "description": "The redundant-but-legal form. A conforming encoder OMITS `backend` when it is `shm`, so a decoder must accept this on the way in and must not emit it on the way out \u2014 `reencoded_backend_field_present` is false here and true for arrow, which is the encoder half of the clause.",
+      "wire_json": "{\"Delta\": {\"base_epoch\": 8, \"epoch\": 9, \"ops\": [{\"SlotValue\": {\"node\": 7, \"payload\": {\"SharedBlob\": {\"offset\": 40, \"len\": 17, \"generation\": 2, \"epoch\": 9, \"checksum\": 987654321, \"backend\": \"shm\"}}}}]}}",
+      "expect": {
+        "decoded_backend": "shm",
+        "reencoded_backend_field_present": false,
+        "node": 7,
+        "offset": 40,
+        "len": 17,
+        "generation": 2,
+        "epoch": 9,
+        "checksum": 987654321
+      }
+    },
+    {
+      "id": "backend_shm_explicit_msgpack",
+      "name": "backend_shm_explicit_msgpack",
+      "codec": "msgpack",
+      "backend_form": "shm",
+      "outcome": "accept",
+      "variant": "Delta",
+      "description": "The redundant-but-legal form. A conforming encoder OMITS `backend` when it is `shm`, so a decoder must accept this on the way in and must not emit it on the way out \u2014 `reencoded_backend_field_present` is false here and true for arrow, which is the encoder half of the clause.",
+      "wire_msgpack_hex": "81a544656c746183aa626173655f65706f636808a565706f636809a36f70739181a9536c6f7456616c756582a46e6f646507a77061796c6f616481aa536861726564426c6f6286a66f666673657428a36c656e11aa67656e65726174696f6e02a565706f636809a8636865636b73756dce3ade68b1a76261636b656e64a373686d",
+      "expect": {
+        "decoded_backend": "shm",
+        "reencoded_backend_field_present": false,
+        "node": 7,
+        "offset": 40,
+        "len": 17,
+        "generation": 2,
+        "epoch": 9,
+        "checksum": 987654321
+      }
+    },
+    {
+      "id": "backend_arrow_json",
+      "name": "backend_arrow_json",
+      "codec": "json",
+      "backend_form": "arrow",
+      "outcome": "accept",
+      "variant": "Delta",
+      "description": "A second real backend, so the leniency above cannot be implemented by ignoring the field outright. A decoder that hardcodes `shm` passes both scenarios above and fails here. It is also the scenario that proves the enum is genuinely multi-valued on the wire, which is what makes routing by `kind` (the resolve_wrong_backend theorem) meaningful at all.",
+      "wire_json": "{\"Delta\": {\"base_epoch\": 8, \"epoch\": 9, \"ops\": [{\"SlotValue\": {\"node\": 7, \"payload\": {\"SharedBlob\": {\"offset\": 40, \"len\": 17, \"generation\": 2, \"epoch\": 9, \"checksum\": 987654321, \"backend\": \"arrow\"}}}}]}}",
+      "expect": {
+        "decoded_backend": "arrow",
+        "reencoded_backend_field_present": true,
+        "node": 7,
+        "offset": 40,
+        "len": 17,
+        "generation": 2,
+        "epoch": 9,
+        "checksum": 987654321
+      }
+    },
+    {
+      "id": "backend_arrow_msgpack",
+      "name": "backend_arrow_msgpack",
+      "codec": "msgpack",
+      "backend_form": "arrow",
+      "outcome": "accept",
+      "variant": "Delta",
+      "description": "A second real backend, so the leniency above cannot be implemented by ignoring the field outright. A decoder that hardcodes `shm` passes both scenarios above and fails here. It is also the scenario that proves the enum is genuinely multi-valued on the wire, which is what makes routing by `kind` (the resolve_wrong_backend theorem) meaningful at all.",
+      "wire_msgpack_hex": "81a544656c746183aa626173655f65706f636808a565706f636809a36f70739181a9536c6f7456616c756582a46e6f646507a77061796c6f616481aa536861726564426c6f6286a66f666673657428a36c656e11aa67656e65726174696f6e02a565706f636809a8636865636b73756dce3ade68b1a76261636b656e64a56172726f77",
+      "expect": {
+        "decoded_backend": "arrow",
+        "reencoded_backend_field_present": true,
+        "node": 7,
+        "offset": 40,
+        "len": 17,
+        "generation": 2,
+        "epoch": 9,
+        "checksum": 987654321
+      }
+    },
+    {
+      "id": "backend_unknown_json",
+      "name": "backend_unknown_json",
+      "codec": "json",
+      "backend_form": "rdma",
+      "outcome": "reject",
+      "variant": "Delta",
+      "description": "The clause. A present `backend` outside the enum MUST be refused, naming the token. Five of nine bindings normalized it to `shm` and documented the normalization as forward-compat; that is the case this scenario exists to make non-conforming. Normalizing routes a non-shm descriptor into the shm table, which is the exact misroute resolve_wrong_backend proves cannot happen \u2014 the lenient bindings were relying on the generation/epoch/checksum verification to produce, probabilistically and downstream, the outcome the routing rule guarantees structurally. Note also what the normalization costs on the OTHER side: `shm` is a real backend this build resolves, so a checksum collision returns bytes, whereas a refusal is a visible protocol error the peer recovers from by resync.",
+      "wire_json": "{\"Delta\": {\"base_epoch\": 8, \"epoch\": 9, \"ops\": [{\"SlotValue\": {\"node\": 7, \"payload\": {\"SharedBlob\": {\"offset\": 40, \"len\": 17, \"generation\": 2, \"epoch\": 9, \"checksum\": 987654321, \"backend\": \"rdma\"}}}}]}}",
+      "expect": {
+        "rejected": true,
+        "error_names_token": "rdma"
+      }
+    },
+    {
+      "id": "backend_unknown_msgpack",
+      "name": "backend_unknown_msgpack",
+      "codec": "msgpack",
+      "backend_form": "rdma",
+      "outcome": "reject",
+      "variant": "Delta",
+      "description": "The clause. A present `backend` outside the enum MUST be refused, naming the token. Five of nine bindings normalized it to `shm` and documented the normalization as forward-compat; that is the case this scenario exists to make non-conforming. Normalizing routes a non-shm descriptor into the shm table, which is the exact misroute resolve_wrong_backend proves cannot happen \u2014 the lenient bindings were relying on the generation/epoch/checksum verification to produce, probabilistically and downstream, the outcome the routing rule guarantees structurally. Note also what the normalization costs on the OTHER side: `shm` is a real backend this build resolves, so a checksum collision returns bytes, whereas a refusal is a visible protocol error the peer recovers from by resync.",
+      "wire_msgpack_hex": "81a544656c746183aa626173655f65706f636808a565706f636809a36f70739181a9536c6f7456616c756582a46e6f646507a77061796c6f616481aa536861726564426c6f6286a66f666673657428a36c656e11aa67656e65726174696f6e02a565706f636809a8636865636b73756dce3ade68b1a76261636b656e64a472646d61",
+      "expect": {
+        "rejected": true,
+        "error_names_token": "rdma"
+      }
+    }
+  ]
+}
