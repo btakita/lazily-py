@@ -12,6 +12,7 @@
   },
   "scenarios": [
     {
+      "id": "span_3_applies_equal_to_unit_fold",
       "name": "span_3_applies_equal_to_unit_fold",
       "description": "A receiver at last_epoch=40 applying this one span-3 delta reaches the same graph and the same last_epoch=43 as a receiver that applied three unit deltas (40->41, 41->42, 42->43) carrying the same ops in order.",
       "receiver_last_epoch": 40,
@@ -38,6 +39,7 @@
       }
     },
     {
+      "id": "gap_rule_unchanged_under_span",
       "name": "gap_rule_unchanged_under_span",
       "description": "A span-3 delta whose base_epoch != last_epoch is still a gap; the span does not relax gap detection.",
       "receiver_last_epoch": 39,

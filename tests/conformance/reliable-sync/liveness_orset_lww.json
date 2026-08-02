@@ -5,6 +5,7 @@
   "model": "LivenessCells",
   "scenarios": [
     {
+      "id": "open_set_add_wins_over_stale_remove",
       "name": "open_set_add_wins_over_stale_remove",
       "description": "OR-set observed-remove: a re-open (add tag t3) concurrent with a lagging close (remove observing only the earlier add tag t1) keeps the doc open. The remove shadows only the adds it observed.",
       "register_kind": "orset",
@@ -22,6 +23,7 @@
       }
     },
     {
+      "id": "lww_alive_highest_stamp_wins",
       "name": "lww_alive_highest_stamp_wins",
       "description": "Per-pid alive is a LWW register: the OS process-exit write (alive=false at a higher stamp) wins; a stale re-assert (alive=true at a lower stamp) is dominated.",
       "register_kind": "lww",
@@ -38,6 +40,7 @@
       }
     },
     {
+      "id": "whole_editor_death_cascades",
       "name": "whole_editor_death_cascades",
       "description": "pid 100 has docA and docB open. One alive[100]=false write recomputes the derived live aggregate for BOTH docs to not-live — the derived slot fans out over every (doc,pid) the pid held. Per-doc close stays a separate open-set remove.",
       "open_set": [
@@ -55,6 +58,7 @@
       }
     },
     {
+      "id": "derived_live_doc_aggregate_converges_under_retry",
       "name": "derived_live_doc_aggregate_converges_under_retry",
       "description": "Two replicas exchange the same liveness ops in different orders and with re-delivery; the derived per-doc live aggregate converges identically (semilattice join). Re-ingesting a seen op applies 0 new ops.",
       "replicas": ["r1", "r2"],

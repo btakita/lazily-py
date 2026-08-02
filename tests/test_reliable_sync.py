@@ -65,16 +65,19 @@ def _load_fixture(name: str) -> dict:
     return instrument(json.loads(path.read_text()), name=f"reliable-sync/{name}")
 
 
-def _scenario(fx: dict, name: str) -> dict:
-    """Look one scenario up by name, booking it as replayed (#lzscenariocoverage).
+def _scenario(fx: dict, scenario_id: str) -> dict:
+    """Look one scenario up by id, booking it as replayed (#lzscenariocoverage).
 
     Booking happens on the match, not on the scan: `next(...)` walks past every
     scenario ahead of the one asked for, and booking those would claim replay for
     scenarios no test here enters — which is exactly the partial replay this rung
     exists to surface.
+
+    Keyed on `id`, never `name` (#recommendedconformanceco): `name` is a prose
+    label, so keying on it means a copy-edit upstream silently stops matching.
     """
     index, scenario = next(
-        (i, s) for i, s in enumerate(fx["scenarios"]) if s["name"] == name
+        (i, s) for i, s in enumerate(fx["scenarios"]) if s["id"] == scenario_id
     )
     return scenario_view(getattr(fx, "conformance_name", ""), scenario, index)
 
@@ -392,7 +395,7 @@ def test_outbox_replay_after_crash(tmp_path: Path) -> None:
 
 def test_outbox_store_protocol(tmp_path: Path) -> None:
     fixture = _load_fixture("outbox_store_protocol.json")
-    ordered = _scenario(fixture, "unordered puts replay in ascending epoch order")
+    ordered = _scenario(fixture, "unordered_puts_replay_in_epoch_order")
     store = InMemoryStore()
     for epoch in ordered["put_epochs"]:
         store.put(epoch, str(epoch).encode())
@@ -402,7 +405,7 @@ def test_outbox_store_protocol(tmp_path: Path) -> None:
         [e for e, _ in store.scan_after(ordered["scan_after"])],
     )
 
-    monotone = _scenario(fixture, "ack cursor is monotone and prune-safe")
+    monotone = _scenario(fixture, "ack_cursor_is_monotone_and_prune_safe")
     outbox = Outbox(InMemoryStore())
     for epoch in monotone["put_epochs"]:
         outbox.append(epoch, IpcMessage.of_delta(Delta.new(epoch - 1, epoch, [])))
@@ -415,7 +418,7 @@ def test_outbox_store_protocol(tmp_path: Path) -> None:
         monotone_expect, "replay_from_zero", [e for e, _ in outbox.replay_from(0)]
     )
 
-    restart = _scenario(fixture, "restart reloads cursor and unacked suffix")
+    restart = _scenario(fixture, "restart_reloads_cursor_and_unacked_suffix")
     path = tmp_path / "protocol.sqlite3"
     first = SqliteOutbox(path, "doc")
     for epoch in restart["put_epochs"]:
@@ -435,7 +438,7 @@ def test_outbox_store_protocol(tmp_path: Path) -> None:
 def test_sqlite_cursor_update_is_serialized_monotone(tmp_path: Path) -> None:
     """A stale writer cannot overwrite a newer cursor persisted by another handle."""
     fixture = _load_fixture("outbox_store_protocol.json")
-    scenario = _scenario(fixture, "stale handle cannot regress serialized cursor")
+    scenario = _scenario(fixture, "stale_handle_cannot_regress_cursor")
     path = tmp_path / "cursor.sqlite3"
     handles = {
         "stale": Outbox(SqliteStore(path, "doc")),

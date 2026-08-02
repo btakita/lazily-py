@@ -1128,7 +1128,9 @@ def _run_corpus(model_cls: Any) -> None:
             else None
         )
         if pair:
-            names = [s["name"] for s in fixture["scenarios"]]
+            # Keyed on `id`, the canonical scenario identity
+            # (#recommendedconformanceco) — `name` is a prose label.
+            names = [s["id"] for s in fixture["scenarios"]]
             index = [names.index(scenario) for scenario in pair]
             for left, right in itertools.pairwise(index):
                 assert reports[left].observation == reports[right].observation, (

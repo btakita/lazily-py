@@ -6,6 +6,7 @@
   "value_type": "bool",
   "scenarios": [
     {
+      "id": "materialize_remote_keys_and_converge",
       "name": "materialize remote keys and converge",
       "origin_peer": 1,
       "target_peer": 2,
@@ -22,6 +23,7 @@
       }
     },
     {
+      "id": "lww_update_converges_after_materialize",
       "name": "last-writer-wins update converges after materialize",
       "origin_peer": 1,
       "target_peer": 2,
@@ -39,6 +41,7 @@
       }
     },
     {
+      "id": "membership_grows_and_reingest_is_idempotent",
       "name": "membership only grows and re-ingest is idempotent",
       "origin_peer": 1,
       "target_peer": 2,

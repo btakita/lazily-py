@@ -5,18 +5,21 @@
   "model": "OutboxStore",
   "scenarios": [
     {
+      "id": "unordered_puts_replay_in_epoch_order",
       "name": "unordered puts replay in ascending epoch order",
       "put_epochs": [3, 1, 2],
       "scan_after": 0,
       "expect": { "epochs": [1, 2, 3] }
     },
     {
+      "id": "ack_cursor_is_monotone_and_prune_safe",
       "name": "ack cursor is monotone and prune-safe",
       "put_epochs": [1, 2, 3, 4],
       "ack_through": [2, 1, 3],
       "expect": { "cursor": 3, "retained": [4], "replay_from_zero": [4] }
     },
     {
+      "id": "restart_reloads_cursor_and_unacked_suffix",
       "name": "restart reloads cursor and unacked suffix",
       "put_epochs": [10, 11, 12],
       "ack_through": [10],
@@ -24,6 +27,7 @@
       "expect": { "loaded_cursor": 10, "retained": [11, 12], "replay": [11, 12] }
     },
     {
+      "id": "stale_handle_cannot_regress_cursor",
       "name": "stale handle cannot regress serialized cursor",
       "open_handles": ["stale", "current"],
       "save_cursor": [

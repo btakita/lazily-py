@@ -5,6 +5,7 @@
   "model": "ResyncCoordinator",
   "scenarios": [
     {
+      "id": "replayed_delta_is_ignored",
       "name": "replayed_delta_is_ignored",
       "description": "Receiver at last_epoch=42 receives a re-delivered delta 40->41 (base_epoch=40 < 42). It is Ignored; state and last_epoch are unchanged.",
       "start_last_epoch": 42,
@@ -19,6 +20,7 @@
       }
     },
     {
+      "id": "duplicate_current_head_is_ignored",
       "name": "duplicate_current_head_is_ignored",
       "description": "An exact re-delivery of the last-applied delta (base_epoch below head) is also Ignored — a duplicate never double-applies.",
       "start_last_epoch": 41,

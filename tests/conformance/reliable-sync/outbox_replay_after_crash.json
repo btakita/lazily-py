@@ -5,6 +5,7 @@
   "model": "DurableOutbox",
   "scenarios": [
     {
+      "id": "crash_between_append_and_ack_replays_on_reconnect",
       "name": "crash_between_append_and_ack_replays_on_reconnect",
       "description": "Sender appends+sends deltas at epochs 41,42,43. The peer acks through 41 (OutboxAck{through_epoch:41}); the outbox may prune <= 41. The sender crashes and restarts; 42 and 43 are still durably in the outbox (append-before-send). On reconnect the peer advertises its cursor (last applied = 41); replay_from(41) re-sends 42 then 43 in order. The receiver applies 42 (base_epoch 41 == last_epoch) then 43. Exactly-once effect: no op lost (42,43 delivered), none doubled (41 already pruned/Ignored).",
       "appended": [
@@ -27,6 +28,7 @@
       }
     },
     {
+      "id": "send_failure_retains_frame_for_next_tick",
       "name": "send_failure_retains_frame_for_next_tick",
       "description": "A send error does not unwind the driver and does not lose the frame: append succeeded, the send failed, so the frame stays in the outbox and is retried from the outbox on a later tick. (Contrast the pre-outbox bug: the out-epoch was bumped before the send, so a failed send left a permanent gap.)",
       "appended": [

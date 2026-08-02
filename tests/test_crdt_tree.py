@@ -27,16 +27,20 @@ def _fixture() -> dict:
     return instrument(json.loads(path.read_text()), name="crdt-tree/algebra.json")
 
 
-def _scenario(name: str) -> dict:
-    """Look one scenario up by name, booking it as replayed (#lzscenariocoverage).
+def _scenario(scenario_id: str) -> dict:
+    """Look one scenario up by id, booking it as replayed (#lzscenariocoverage).
 
-    The lookup itself cannot be the record: `next(... if name == ...)` walks past
+    The lookup itself cannot be the record: `next(... if id == ...)` walks past
     the scenarios ahead of the match, and booking those would claim replay for
     scenarios this test never enters. Only the one handed back is booked.
+
+    Keyed on `id`, never `name` (#recommendedconformanceco): `name` is a prose
+    label, so keying on it means a copy-edit upstream silently stops matching —
+    which is how this file used to fail.
     """
     fixture = _fixture()
     index, scenario = next(
-        (i, s) for i, s in enumerate(fixture["scenarios"]) if s["name"] == name
+        (i, s) for i, s in enumerate(fixture["scenarios"]) if s["id"] == scenario_id
     )
     return scenario_view("crdt-tree/algebra.json", scenario, index)
 
@@ -52,7 +56,7 @@ def _replicas(scenario: dict) -> tuple[TextCrdt, dict[str, TextCrdt]]:
 
 
 def test_merge_algebra_is_order_and_duplication_independent() -> None:
-    scenario = _scenario("merge algebra is order and duplication independent")
+    scenario = _scenario("merge_is_order_and_duplication_independent")
     base, replicas = _replicas(scenario)
     results: list[TextCrdt] = []
     for index, order in enumerate(scenario["merge_orders"]):
@@ -74,7 +78,7 @@ def test_merge_algebra_is_order_and_duplication_independent() -> None:
 
 
 def test_empty_frontier_snapshot_preserves_lineage() -> None:
-    scenario = _scenario("empty frontier snapshot preserves lineage")
+    scenario = _scenario("empty_frontier_snapshot_preserves_lineage")
     source = TextCrdt.seed(scenario["seed"]["peer"], scenario["seed"]["text"])
     restored = TextCrdt(scenario["restore_peer"])
 
@@ -98,7 +102,7 @@ def test_empty_frontier_snapshot_preserves_lineage() -> None:
 
 
 def test_own_frontier_emits_empty_delta() -> None:
-    scenario = _scenario("own frontier emits an empty delta")
+    scenario = _scenario("own_frontier_emits_empty_delta")
     tree = TextCrdt.seed(scenario["seed"]["peer"], scenario["seed"]["text"])
     delta = tree.delta_since(tree.version_vector())
     expect = scenario["expect"]

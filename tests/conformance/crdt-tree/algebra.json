@@ -4,6 +4,7 @@
   "model": "TextCrdt",
   "scenarios": [
     {
+      "id": "merge_is_order_and_duplication_independent",
       "name": "merge algebra is order and duplication independent",
       "seed": { "peer": 1, "text": "root\n" },
       "replicas": [
@@ -15,6 +16,7 @@
       "expect": { "texts_equal": true, "version_vectors_equal": true }
     },
     {
+      "id": "empty_frontier_snapshot_preserves_lineage",
       "name": "empty frontier snapshot preserves lineage",
       "seed": { "peer": 7, "text": "snapshot\n" },
       "snapshot": "delta_since({})",
@@ -23,6 +25,7 @@
       "expect": { "restored_text_equal": true, "op_ids_equal": true, "later_merge_duplicates": 0 }
     },
     {
+      "id": "own_frontier_emits_empty_delta",
       "name": "own frontier emits an empty delta",
       "seed": { "peer": 9, "text": "steady\n" },
       "frontier": "version_vector()",

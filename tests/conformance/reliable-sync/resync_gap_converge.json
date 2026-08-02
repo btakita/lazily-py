@@ -5,6 +5,7 @@
   "model": "ResyncCoordinator",
   "scenarios": [
     {
+      "id": "drop_suffix_then_resync_converges",
       "name": "drop_suffix_then_resync_converges",
       "description": "Receiver A applies epochs 1,2 then MISSES the delta 2->3 (dropped). The next inbound delta 3->4 has base_epoch=3 > last_epoch=2 -> gap. A emits ResyncRequest{from:2}, the sender replies Snapshot{epoch:4}, A applies it. A's final graph equals receiver B's, which saw every delta 1->2->3->4.",
       "start_last_epoch": 1,
@@ -22,6 +23,7 @@
       }
     },
     {
+      "id": "single_request_per_gap",
       "name": "single_request_per_gap",
       "description": "While resyncing (request outstanding, covering Snapshot not yet applied), further ahead-of-cursor deltas are Ignored and do NOT emit duplicate ResyncRequests. Bounds request storms under a burst.",
       "start_last_epoch": 2,
