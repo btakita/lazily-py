@@ -87,11 +87,17 @@ class InteropPeer:
                 "stdlib_timeout_v1",
                 "stdlib_revision_barrier_v1",
             ],
-            "codecs": ["json"],
+            # `msgpack` left the carve-out list when lazily-py grew the wire the
+            # token actually names (#lzmsgpackseven): externally tagged envelope
+            # over named-field maps, replayed against
+            # conformance/codec/frame_roundtrip_msgpack.json. Declaring a codec
+            # here is a promise a peer may act on, so it moves only when the
+            # round-trip fixture proves it.
+            "codecs": ["json", "msgpack"],
             "channels": [],
             "channel_variants": {},
             "platform_profile": "portable",
-            "carve_outs": ["msgpack", "transport_links"],
+            "carve_outs": ["transport_links"],
         }
 
     @staticmethod

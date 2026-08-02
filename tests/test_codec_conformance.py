@@ -9,32 +9,47 @@ replayed — all reason about fixture *content*, and content replay never
 exercises a codec, so a binding could carve out a MUST-level codec and stay
 green on every rung.
 
-lazily-py implements the ``json`` half. ``msgpack`` is an explicit carve-out
-(declared in ``interop_peer.py`` and now in
-``scripts/check-conformance-coverage.sh``), so
-``codec/frame_roundtrip_msgpack.json`` is listed as known-uncovered rather than
-silently ignored.
+lazily-py implements **both** halves (``#lzmsgpackseven``). The ``msgpack``
+codec is dependency-free and derived from the same ``to_wire()`` value tree the
+``json`` codec serializes, so the externally tagged envelope, the named-field
+maps and both ``NodeKey`` rules are identical across the two by construction —
+see ``lazily/msgpack_codec.py``.
 
 The runner decodes ``wire``, **re-encodes the decoded message**, decodes again,
 and evaluates every ``expect`` key against that second decode. Asserting
 against the fixture literal would prove nothing: the literal never passed
 through an encoder.
+
+The msgpack half adds one thing the value assertions structurally cannot see.
+Named-field encoding is a property of the ENCODING, not of any decoded value: a
+positional encoder round-trips every field correctly and is still a private
+codec no peer that negotiated ``msgpack`` could read. So the encoded bytes are
+also introspected SCHEMA-LESSLY — decoded into a plain map/list tree — and the
+envelope key plus the (sorted; map key order is encoder-defined) field names are
+asserted against the fixture.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from conformance_assert import TrackedBlock, assert_key, instrument, scenarios
 
 from lazily.ipc import IpcMessage, NodeState_Opaque, NodeState_Payload
+from lazily.msgpack_codec import msgpack_unpack
+
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 _LOCAL_FIXTURES = Path(__file__).resolve().parent / "conformance"
 _SPEC_FIXTURES = Path(__file__).resolve().parents[2] / "lazily-spec" / "conformance"
 
 _JSON_FIXTURE = "codec/frame_roundtrip_json.json"
+_MSGPACK_FIXTURE = "codec/frame_roundtrip_msgpack.json"
 
 
 def _load(name: str) -> dict:
@@ -132,26 +147,112 @@ def _assert_values(block: TrackedBlock, message: IpcMessage) -> None:
         _assert_crdt_sync(block, message.crdt_sync)
 
 
-def test_json_frames_round_trip() -> None:
-    fixture = _load(_JSON_FIXTURE)
-    _assert_fixture_block(fixture, "json", byte_canonical=True)
+def _assert_msgpack_encoding(block: TrackedBlock, variant: str, encoded: bytes) -> None:
+    """Assert the *encoding* of a msgpack frame, not its decoded value.
 
+    Everything above this point survives a positional encoder unharmed: an
+    encoder that packs each struct as an array round-trips every field and is
+    still speaking a private codec that no peer negotiating ``msgpack`` can
+    read. The named-field rule is only visible in the bytes, so this decodes
+    them schema-lessly — into plain maps and lists, with no ``IpcMessage``
+    knowledge in the path — and compares what is actually there.
+    """
+    raw = msgpack_unpack(encoded)
+    assert isinstance(raw, dict), (
+        "an `msgpack` frame is an externally tagged map, not "
+        f"{type(raw).__name__} — a positional or internally tagged envelope is "
+        "a private codec wearing the token"
+    )
+    assert len(raw) == 1, (
+        f"externally tagged envelope carries exactly one entry, got {sorted(raw)}"
+    )
+    tag, body = next(iter(raw.items()))
+    assert_key(block, "encoded_envelope_key", tag)
+    assert isinstance(body, dict), "frame bodies are named-field maps"
+    # Sorted: a MessagePack map's key order is encoder-defined (§ Frame codecs),
+    # so comparing in emission order would pin a property no peer may rely on.
+    assert_key(block, "encoded_body_field_names", sorted(body))
+
+    if variant == "Snapshot":
+        # No `key`: `NodeSnapshot.key` is absent here and a self-describing
+        # codec OMITS it (§ NodeKey). Writing it as `null` instead round-trips
+        # identically and breaks the rule that lets a pre-`key` decoder read a
+        # post-`key` frame.
+        assert_key(block, "first_node_encoded_field_names", sorted(body["nodes"][0]))
+    elif variant == "CrdtSync":
+        # Both DO carry `key` — a `CrdtOp` always writes it, `null` when unset,
+        # because an anti-entropy op's addressing is part of its merge identity.
+        assert_key(block, "first_op_encoded_field_names", sorted(body["ops"][0]))
+        assert_key(block, "second_op_encoded_field_names", sorted(body["ops"][1]))
+
+
+def _replay(
+    fixture: dict,
+    name: str,
+    encode: Callable[[IpcMessage], Any],
+    decode: Callable[[Any], IpcMessage],
+    encoding_check: Callable[[TrackedBlock, str, Any], None] | None = None,
+) -> None:
+    """Decode → RE-ENCODE → decode, asserting only against the second decode.
+
+    One shape serves both codecs because the two fixtures carry identical
+    ``wire`` values on purpose; the codec-specific part is the encode/decode
+    pair and, for msgpack, the encoding introspection.
+    """
     replayed = 0
-    for scenario in scenarios(fixture, name=_JSON_FIXTURE):
+    for scenario in scenarios(fixture, name=name):
         source = IpcMessage.from_wire(scenario["wire"])
-        assert _variant(source) == scenario["variant"], (
+        variant = _variant(source)
+        assert variant == scenario["variant"], (
             "fixture `variant` disagrees with the decoded frame"
         )
 
         # Encode the DECODED message and decode the result. The fixture literal
         # is never re-asserted, so a codec that silently drops a field cannot be
         # masked by reading the input back.
-        encoded = source.encode_json()
-        round_tripped = IpcMessage.decode_json(encoded)
+        encoded = encode(source)
 
         block: TrackedBlock = scenario["expect"]
+        # The encoding check runs BEFORE the decode on purpose. What is on the
+        # wire is the interop obligation; a frame that only this binding's own
+        # decoder can read is the failure, and letting the decode go first would
+        # let its exception preempt the assertion that names the real defect.
+        if encoding_check is not None:
+            encoding_check(block, variant, encoded)
+
+        round_tripped = decode(encoded)
         assert_key(block, "round_trip_equals_source", round_tripped == source)
         _assert_values(block, round_tripped)
         replayed += 1
 
     assert replayed == 3, "one scenario per IpcMessage variant"
+
+
+def test_json_frames_round_trip() -> None:
+    fixture = _load(_JSON_FIXTURE)
+    _assert_fixture_block(fixture, "json", byte_canonical=True)
+    _replay(
+        fixture,
+        _JSON_FIXTURE,
+        IpcMessage.encode_json,
+        IpcMessage.decode_json,
+    )
+
+
+def test_msgpack_frames_round_trip() -> None:
+    """``msgpack`` is MUST-level for every binding (protocol.md § Frame codecs).
+
+    ``byte_canonical=False`` is not a softer obligation, it is a different one:
+    two conforming bindings MAY emit byte-different frames for the same
+    ``IpcMessage``, so the fixture pins the decoded value plus the encoded field
+    NAMES, never a golden byte string.
+    """
+    fixture = _load(_MSGPACK_FIXTURE)
+    _assert_fixture_block(fixture, "msgpack", byte_canonical=False)
+    _replay(
+        fixture,
+        _MSGPACK_FIXTURE,
+        IpcMessage.encode_msgpack,
+        IpcMessage.decode_msgpack,
+        _assert_msgpack_encoding,
+    )

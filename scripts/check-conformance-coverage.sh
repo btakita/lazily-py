@@ -48,14 +48,6 @@ fi
 KNOWN_UNCOVERED=(
   "agent-doc/delta_agent_doc_state.json"
   "agent-doc/snapshot_agent_doc_state.json"
-  # msgpack is a protocol.md MUST that lazily-py does not implement
-  # (#lzmsgpackparity). The gap was already declared, but only in the
-  # interop-peer handshake's `carve_outs` — a place no parity surface reads. It
-  # belongs here, beside every other declared gap: the `json` half of the codec
-  # obligation IS replayed (tests/test_codec_conformance.py), so this entry
-  # names exactly what is missing rather than the whole obligation. Closing it
-  # means encoding/decoding IpcMessage as a named-field MessagePack map.
-  "codec/frame_roundtrip_msgpack.json"
   "reliable-sync/coalesce_bounds_outbox.json"
   "reliable-sync/liveness_lease_eviction.json"
 )

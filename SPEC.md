@@ -254,6 +254,14 @@ observers across processes and languages. The JSON representation is
   are enforced on construction and on the wire.
 - `IpcMessage.encode_json()` / `decode_json()` move transport-agnostic bytes
   (unix socket, pipe, WebSocket, WebRTC data channel, shared memory).
+- `IpcMessage.encode_msgpack()` / `decode_msgpack()` speak the `msgpack`
+  cross-language binary default. Same logical schema, same external tags, same
+  field names, same omit-when-absent rule — the frame is serialized from the
+  same `to_wire()` tree, so the two codecs cannot drift apart. Byte payloads
+  stay **arrays of integers** (never MessagePack `bin`, which the reference
+  decoder rejects in that position). Unlike `json`, `msgpack` is **not
+  byte-canonical**: map key order is encoder-defined, so conformance is
+  `decode(encode(m)) == m`, not a golden byte string.
 
 ### NodeKey
 

@@ -84,6 +84,8 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
+from .msgpack_codec import msgpack_pack, msgpack_unpack
+
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -1410,6 +1412,26 @@ class IpcMessage:
         if isinstance(data, (bytes, bytearray)):
             data = bytes(data).decode("utf-8")
         return cls.from_wire(json.loads(data))
+
+    def encode_msgpack(self) -> bytes:
+        """Serialize to ``msgpack`` frame bytes — the cross-language binary
+        default (protocol.md § Frame codecs).
+
+        Deliberately serializes the very tree :meth:`to_wire` builds for the
+        ``json`` reference codec rather than describing the frame a second
+        time. The codec token names one wire — externally tagged envelope over
+        named-field maps keyed by the ``json`` field names, with the same
+        omit-when-absent rule for the optional ``NodeKey`` — and deriving it
+        from ``to_wire()`` makes those properties identical to the reference
+        codec by construction. Not byte-canonical: MessagePack map key order is
+        encoder-defined, so conformance is ``decode(encode(m)) == m``.
+        """
+        return msgpack_pack(self.to_wire())
+
+    @classmethod
+    def decode_msgpack(cls, data: bytes | bytearray | memoryview) -> IpcMessage:
+        """Parse ``msgpack`` frame bytes produced by any lazily binding."""
+        return cls.from_wire(msgpack_unpack(data))
 
 
 # ---------------------------------------------------------------------------

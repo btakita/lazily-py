@@ -25,9 +25,11 @@ from lazily.ipc import (
     NodeSnapshot,
     NodeState_Payload,
     OpKind,
+    OutboxAck,
     PeerPermissions,
     PermissionDenied,
     RemoteOp,
+    ResyncRequest,
     ShmBlobArena,
     ShmBlobCapacityTooSmall,
     ShmBlobChecksumMismatch,
@@ -37,6 +39,7 @@ from lazily.ipc import (
     Snapshot,
     WireStamp,
 )
+from lazily.msgpack_codec import MsgpackCodecError, msgpack_pack, msgpack_unpack
 
 
 # ---------------------------------------------------------------------------
@@ -498,6 +501,80 @@ def test_crdt_sync_from_wire_accepts_keyless_op() -> None:
     assert message.is_crdt_sync
     assert message.crdt_sync.ops[0].key is None
     assert message.to_wire() == wire
+
+
+# ---------------------------------------------------------------------------
+# msgpack codec (#lzmsgpackseven) — the cross-language binary default.
+#
+# The conformance runner in test_codec_conformance.py replays the canonical
+# fixture; these cover the wire rules that fixture cannot reach, because they
+# are about frames a CONFORMING peer never sends and this binding must still
+# refuse rather than quietly accept.
+# ---------------------------------------------------------------------------
+
+
+def test_msgpack_control_frames_round_trip() -> None:
+    # The reliable-sync reverse channel is outside the codec fixture's three
+    # scenarios, and an externally tagged unit-ish variant is exactly where a
+    # codec silently grows a second shape.
+    for message in (
+        IpcMessage.of_resync_request(ResyncRequest(from_epoch=3)),
+        IpcMessage.of_outbox_ack(OutboxAck(through_epoch=9)),
+    ):
+        packed = message.encode_msgpack()
+        assert IpcMessage.decode_msgpack(packed) == message
+        assert sorted(msgpack_unpack(packed)) == sorted(message.to_wire())
+
+
+def test_msgpack_rejects_bin_in_a_byte_payload_position() -> None:
+    # Byte payloads are ARRAYS OF INTEGERS on this wire — what rmp_serde emits
+    # for `Vec<u8>` and what its decoder accepts. Reading `bin` here would let
+    # lazily-py accept frames no conforming peer produces, which is the private
+    # extension the codec token exists to exclude.
+    body = msgpack_pack(
+        {"Snapshot": {"epoch": 1, "nodes": [], "edges": [], "roots": []}}
+    )
+    # 0xc4 = bin8; splice one in where the encoder would have written an array.
+    frame = body.replace(b"\x90", b"\xc4\x00", 1)
+    with pytest.raises(MsgpackCodecError, match="arrays of integers"):
+        IpcMessage.decode_msgpack(frame)
+    with pytest.raises(MsgpackCodecError, match="arrays of integers"):
+        msgpack_pack({"Snapshot": {"payload": b"\x01\x02"}})
+
+
+def test_msgpack_rejects_non_string_map_keys_and_trailing_bytes() -> None:
+    # A map with integer keys is a positional encoding wearing a map's clothes.
+    with pytest.raises(MsgpackCodecError, match="string keys"):
+        msgpack_unpack(b"\x81\x01\x02")
+    with pytest.raises(MsgpackCodecError, match="trailing bytes"):
+        msgpack_unpack(msgpack_pack(1) + b"\x01")
+
+
+def test_msgpack_is_not_byte_canonical_but_is_semantically_stable() -> None:
+    # Map key order is encoder-defined (§ Frame codecs), so a peer's frame with
+    # a different key order is the SAME frame. Decoding one proves the binding
+    # reads the wire rather than only its own emission order.
+    snapshot = Snapshot(
+        epoch=7,
+        nodes=[NodeSnapshot.payload(1, "i32", bytes([1, 2, 3]))],
+        edges=[],
+        roots=[1],
+    )
+    message = IpcMessage.of_snapshot(snapshot)
+    reordered = msgpack_pack(
+        {
+            "Snapshot": {
+                "roots": [1],
+                "edges": [],
+                "nodes": [
+                    {"state": {"Payload": [1, 2, 3]}, "type_tag": "i32", "node": 1}
+                ],
+                "epoch": 7,
+            }
+        }
+    )
+    assert reordered != message.encode_msgpack()
+    assert IpcMessage.decode_msgpack(reordered) == message
 
 
 # ---------------------------------------------------------------------------

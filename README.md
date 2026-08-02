@@ -104,7 +104,7 @@ notes and platform carve-outs lives in
 | Registers (LWW / MV) + `PnCounter` + `CellCrdt` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | IPC wire — `Snapshot` + `Delta` + `CrdtSync` | ✅ | ✅ | ✅ | ✅ | ~ | ✅ | ✅ | ✅ | ✅ |
 | Frame codec — `json` **reference codec**: dependency-free interop floor, FFI baseline form, byte-canonical (**MUST**) — executable round-trip obligation (`conformance/codec/frame_roundtrip_json.json`, `#lzmsgpackparity`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Frame codec — `msgpack` **cross-language binary default**: externally-tagged frame over named-field maps, semantic (not byte-identical) round-trip (**MUST**) — executable round-trip obligation (`conformance/codec/frame_roundtrip_msgpack.json`, `#lzmsgpackparity`). Shipping *a* MessagePack codec does not earn this mark: lazily-cpp read `~` here while its private internally-tagged framing wore the token, and only flipped once it shipped the spec wire (`#lzcppmsgpackwire`) | ✅ | — | — | — | — | — | — | ✅ | — |
+| Frame codec — `msgpack` **cross-language binary default**: externally-tagged frame over named-field maps, semantic (not byte-identical) round-trip (**MUST**) — executable round-trip obligation (`conformance/codec/frame_roundtrip_msgpack.json`, `#lzmsgpackparity`). Shipping *a* MessagePack codec does not earn this mark: lazily-cpp read `~` here while its private internally-tagged framing wore the token, and only flipped once it shipped the spec wire (`#lzcppmsgpackwire`) | ✅ | ✅ | — | — | — | — | — | ✅ | — |
 | Frame codec — `postcard` positional same-schema fast path: smallest + byte-canonical, not cross-language (**MAY**) | ✅ | — | — | — | — | — | — | — | — |
 | Shared-memory blob path (`ShmBlobArena`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Cross-process zero-copy transport (`BlobBackend` / shm / arrow) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -474,6 +474,13 @@ delta = Delta.next(40, [
     DeltaOp.invalidate(3),
 ])
 IpcMessage.of_delta(delta).encode_json()
+
+# The same frames over `msgpack`, the cross-language binary default: an
+# externally tagged envelope over MessagePack maps keyed by the *json* field
+# names. Map key order is encoder-defined, so conformance is a semantic round
+# trip — `decode(encode(m)) == m` — never a golden byte string.
+packed = IpcMessage.of_snapshot(snap).encode_msgpack()
+assert IpcMessage.decode_msgpack(packed).snapshot == snap
 ```
 
 A `PeerPermissions` boundary gates what is shared: it is **default-deny**, so only

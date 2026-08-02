@@ -2,6 +2,18 @@
 
 ### Added
 
+- The `msgpack` frame codec — the cross-language binary default protocol.md
+  § Frame codecs makes MUST-level for every binding (`#lzmsgpackseven`).
+  `IpcMessage.encode_msgpack()` / `decode_msgpack()` speak the wire the token
+  actually names: an externally tagged envelope (`{"Snapshot": …}`) over
+  MessagePack maps keyed by the `json` field names, with the same
+  omit-when-absent rule for the optional `NodeKey` and byte payloads as arrays
+  of integers rather than `bin`. Dependency-free, and derived from the same
+  `to_wire()` value tree the `json` codec serializes so the two cannot drift.
+  `conformance/codec/frame_roundtrip_msgpack.json` now replays, including
+  schema-less introspection of the encoded bytes — the only assertion that can
+  tell a named-field encoder from a positional one — and `msgpack` has left the
+  interop peer's `carve_outs`.
 - Transport-agnostic reactive ingress family (`#designimplementtransport`):
   `IngressCore` (the graph-agnostic admission algebra) plus all three flavor
   shells — `IngressCell`, `ThreadSafeIngressCell`, `AsyncIngressCell`. Keyed
