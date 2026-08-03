@@ -64,6 +64,54 @@ visible next to the runner that takes it, rather than buried in a global
 allowlist. Prose is exempt from all three verdicts. Everything else must be
 consumed *and* asserted (or excused) or the guard fails.
 
+Declared prose keys are DISCHARGED, not excused (#lzprosekeyconvention)
+-----------------------------------------------------------------------
+The paragraph above describes narration a runner may ignore. A *declared* prose
+key is the opposite: it states an OBLIGATION in English, and the corpus now says
+which keys those are, in the block's own ``assertions.prose`` array. lazily-spec
+``docs/conformance.md`` § Prose assertion keys is normative; this module is the
+lazily-py half of it.
+
+Replaying ``blob_backend_discriminator.json`` v2 produced four different
+treatments of the same four paragraphs across the nine bindings. lazily-py's was
+the second-best of the four — it excused each one with an individually-worded
+reason naming the assertion that discharges it, which is falsifiable in
+principle and was checked by nothing. The convention makes exactly that claim
+checkable, and deletes the free-text form so there are not two paths to satisfy
+one key.
+
+A declared prose key is satisfied by :func:`prose_key`, which names the
+executable assertion keys that carry its obligation, and by nothing else. The
+tracker fails the run when:
+
+1. a declared prose key is ASSERTED — comparing a paragraph, or a tally derived
+   from one, to an English string pins wording, not behaviour;
+2. a declared prose key is EXCUSED with free text — the unfalsifiable form;
+3. a key *not* declared prose is discharged;
+4. the discharged set differs from ``assertions.prose`` — the comparison that
+   consumes ``prose`` itself, and what makes a forgotten key fail rather than
+   vanish;
+5. a discharge names no keys;
+6. a discharge names a key this fixture's run did not assert — the rule that
+   makes the excuse falsifiable at all;
+7. a discharge names a key that is itself prose.
+
+The ledger is FIXTURE-scoped, not block-scoped: ``epoch_disambiguation`` sits in
+``assertions`` and is discharged by ``expect.frame_epoch`` / ``expect.blob_epoch``,
+asserted long after the ``assertions`` block is finished. So a named key matches
+by NAME in any block of that fixture, and the verdict lands when the fixture's
+replay is done — :func:`verify_prose`. A run that never verifies fails from
+``conftest.pytest_sessionfinish``: an unverified discharge claim is exactly as
+unchecked as an unconsumed key.
+
+``note`` / ``description`` / ``reason`` inside a per-step or per-scenario block
+stay exempt BY NAME (:data:`PROSE_KEYS`) — the ~97 step notes in the
+reactive-graph corpus are annotations, not obligations. That exemption stops at
+the block's own declaration: a key listed in ``assertions.prose`` is NOT
+satisfied by the blanket, even when it is spelled ``note``, which is how
+``frame_roundtrip_json.json``'s top-level ``note`` — a real obligation about
+``role`` vs ``byte_canonical`` — gets discharged rather than waved through.
+
 Scenario was never replayed (#lzscenariocoverage)
 -------------------------------------------------
 The rungs above all reason about the scenarios a runner *reached*. A fixture that
@@ -111,6 +159,7 @@ from typing import Any
 
 __all__ = [
     "BLOCK_KEYS",
+    "PROSE_DECLARATION_KEY",
     "PROSE_KEYS",
     "SCENARIO_EXCUSES",
     "SCENARIO_LABEL_KEYS",
@@ -120,9 +169,12 @@ __all__ = [
     "assert_key_with",
     "consumption_failures",
     "corpus_dir",
+    "discharged_prose",
     "excuse_key",
     "excuse_scenario",
     "instrument",
+    "prose_failures",
+    "prose_key",
     "record_scenario",
     "replayed_scenarios",
     "reset",
@@ -131,6 +183,7 @@ __all__ = [
     "scenario_view",
     "scenarios",
     "tracked",
+    "verify_prose",
 ]
 
 #: Fixture keys whose dict value is an expectation block. These are the names the
@@ -146,11 +199,28 @@ BLOCK_KEYS = frozenset(
 #: needs a per-call-site ``prose=(...)`` declaration to claim the same exemption.
 PROSE_KEYS = frozenset({"comment", "description", "note", "notes", "reason", "why"})
 
+#: The key an assertion block uses to DECLARE which of its siblings are prose
+#: (``#lzprosekeyconvention``). The corpus decides; a binding must not. Because
+#: the declaration is itself a key of the block, the consumption guard above sees
+#: it: a runner that ignores it fails with an unconsumed key, which is what makes
+#: the rollout self-enforcing.
+PROSE_DECLARATION_KEY = "prose"
+
 
 class _Ledger:
     """Session-wide consumption record for one ``(fixture, block)`` pair."""
 
-    __slots__ = ("asserted", "block", "excused", "fixture", "keys", "prose", "seen")
+    __slots__ = (
+        "asserted",
+        "block",
+        "declared_prose",
+        "discharged",
+        "excused",
+        "fixture",
+        "keys",
+        "prose",
+        "seen",
+    )
 
     def __init__(self, fixture: str, block: str) -> None:
         self.fixture = fixture
@@ -160,13 +230,33 @@ class _Ledger:
         self.asserted: set[str] = set()
         self.excused: dict[str, str] = {}
         self.prose: set[str] = set()
+        #: Keys this block's own ``prose`` array declares as obligations.
+        self.declared_prose: set[str] = set()
+        #: Declared prose key -> the executable keys named as discharging it.
+        self.discharged: dict[str, tuple[str, ...]] = {}
+
+    def blanket_exempt(self) -> set[str]:
+        """Names waved through as annotation, minus anything the block DECLARED.
+
+        The by-name exemption is only safe while the key annotates. A key the
+        corpus lists in ``assertions.prose`` states an obligation, so the blanket
+        must not reach it even when it is spelled ``note`` — otherwise the
+        reserved name becomes a place no runner can be made to discharge
+        anything, which is the hazard the convention names explicitly.
+        """
+        return self.prose - self.declared_prose
 
     def unconsumed(self) -> list[str]:
-        return sorted(self.keys - self.seen - self.prose)
+        return sorted(self.keys - self.seen - self.blanket_exempt())
 
     def read_not_asserted(self) -> list[str]:
         """Keys some runner read but no runner compared against the fixture value."""
-        satisfied = self.asserted | set(self.excused) | self.prose
+        satisfied = (
+            self.asserted
+            | set(self.excused)
+            | self.blanket_exempt()
+            | set(self.discharged)
+        )
         return sorted((self.keys & self.seen) - satisfied)
 
     def stale_excuses(self) -> list[str]:
@@ -202,6 +292,17 @@ class TrackedBlock(Mapping[str, Any]):
         # call site IS the act of looking at them, and there is nothing to check.
         ledger.prose.update(prose)
         ledger.prose.update(PROSE_KEYS)
+        # The CORPUS's own declaration (#lzprosekeyconvention) is not an
+        # exemption — it is the list of keys that must be DISCHARGED. Registering
+        # it here rather than at the call site is deliberate: a binding must not
+        # decide for itself which keys are prose, and reading the block is the
+        # only moment the corpus's answer is in hand.
+        declared = self._data.get(PROSE_DECLARATION_KEY)
+        if isinstance(declared, (list, tuple)):
+            names = [name for name in declared if isinstance(name, str)]
+            ledger.declared_prose.update(names)
+            if names:
+                _PROSE_VERIFIED.setdefault(fixture, False)
         self._ledger = ledger
 
     # -- Mapping protocol; every path marks consumption ---------------------
@@ -243,7 +344,9 @@ class TrackedBlock(Mapping[str, Any]):
         # Whole-block equality is the strongest form of consumption there is: it
         # checks every key AND rejects keys the runner did not expect. Every
         # fixture value reaches the comparison, so it also counts as asserting
-        # every key (#lzconsumednotasserted).
+        # every key (#lzconsumednotasserted) — including, therefore, any declared
+        # prose key, which is rule 1 and refused as such.
+        self._refuse_asserting_prose(sorted(self._data), "whole-block equality")
         self._ledger.seen.update(self._data)
         self._ledger.asserted.update(self._data)
         if isinstance(other, TrackedBlock):
@@ -259,17 +362,45 @@ class TrackedBlock(Mapping[str, Any]):
         return f"TrackedBlock({self.fixture}:{self.block}, {self._data!r})"
 
     def unconsumed(self) -> list[str]:
-        return sorted(set(self._data) - self._ledger.seen - self._ledger.prose)
+        return sorted(
+            set(self._data) - self._ledger.seen - self._ledger.blanket_exempt()
+        )
 
     # -- Assertion ledger (#lzconsumednotasserted) --------------------------
 
+    def _refuse_asserting_prose(self, keys: Iterable[str], how: str) -> None:
+        """Rule 1: a declared prose key must never reach a comparison."""
+        offending = sorted(self._ledger.declared_prose.intersection(keys))
+        if not offending:
+            return
+        raise AssertionError(
+            f"{self.fixture} [{self.block}]: {how} would ASSERT prose key(s) "
+            f"{offending}. `assertions.prose` declares them as English "
+            f"obligations, and comparing a paragraph — or a tally derived from "
+            f"one — to a literal pins WORDING, not behaviour: a copy-edit "
+            f"reddens the run and a library regression does not. Discharge them "
+            f"with prose_key(block, key, discharged_by=[...]) instead "
+            f"(#lzprosekeyconvention)"
+        )
+
     def mark_asserted(self, key: str) -> Any:
         """Record that ``key``'s fixture value reached a comparison; return it."""
+        self._refuse_asserting_prose((key,), f"assert_key({key!r})")
         value = self[key]  # marks read
         self._ledger.asserted.add(key)
         return value
 
     def mark_excused(self, key: str, reason: str) -> None:
+        if key in self._ledger.declared_prose:
+            raise AssertionError(
+                f"{self.fixture} [{self.block}]: excuse_key({key!r}) is a "
+                f"free-text excuse for a key `assertions.prose` DECLARES "
+                f"(#lzprosekeyconvention). An unfalsifiable reason is "
+                f"indistinguishable from the undocumented default this clause "
+                f"exists to remove. Name the executable keys that carry the "
+                f"obligation instead: "
+                f"prose_key(block, {key!r}, discharged_by=[...])"
+            )
         if not reason or not reason.strip():
             raise AssertionError(
                 f"{self.fixture} [{self.block}]: excuse_key({key!r}) needs a "
@@ -378,6 +509,206 @@ def excuse_key(block: TrackedBlock, key: str, reason: str) -> None:
     block.mark_excused(key, reason)
 
 
+# ---------------------------------------------------------------------------
+# Declared prose keys: discharge, never assert, never excuse
+# (#lzprosekeyconvention)
+# ---------------------------------------------------------------------------
+
+#: fixture -> whether ``verify_prose`` ran for it. An entry appears as soon as a
+#: block of that fixture DECLARES prose, or as soon as a discharge is claimed, so
+#: the "never verified" verdict does not depend on the runner remembering to
+#: register anything.
+_PROSE_VERIFIED: dict[str, bool] = {}
+
+
+def _fixture_ledgers(fixture: str) -> list[_Ledger]:
+    return [ledger for (name, _), ledger in _LEDGERS.items() if name == fixture]
+
+
+def _fixture_declared_prose(fixture: str) -> set[str]:
+    declared: set[str] = set()
+    for ledger in _fixture_ledgers(fixture):
+        declared |= ledger.declared_prose
+    return declared
+
+
+def _fixture_asserted(fixture: str) -> set[str]:
+    """Every key name this fixture's run compared against the fixture's value.
+
+    Fixture-scoped on purpose: ``epoch_disambiguation`` lives in ``assertions``
+    and is discharged by ``expect.frame_epoch`` / ``expect.blob_epoch``, which
+    are asserted long after that block is finished. Matching is therefore by key
+    NAME in any block of the fixture.
+    """
+    asserted: set[str] = set()
+    for ledger in _fixture_ledgers(fixture):
+        asserted |= ledger.asserted
+    return asserted
+
+
+def prose_key(
+    block: TrackedBlock,
+    key: str,
+    discharged_by: Iterable[str],
+) -> tuple[str, ...]:
+    """Discharge a declared prose key by naming the assertions that carry it.
+
+    The replacement for the free-text ``excuse_key`` reasons this binding used
+    to write for these paragraphs — not a sibling of them. Two paths to satisfy
+    one key is the ambiguity ``#lzprosekeyconvention`` removes, so a declared
+    prose key reaches :func:`excuse_key` and :func:`assert_key` as an error.
+
+    Refused at the call site: a key the corpus does not declare prose (rule 3),
+    a discharge naming nothing (rule 5), and a discharge naming another prose
+    key (rule 7). The remaining two — the discharged SET matching
+    ``assertions.prose`` (rule 4) and every named key really having been
+    asserted (rule 6) — need the whole fixture's replay, so they land in
+    :func:`verify_prose`.
+    """
+    if not isinstance(block, TrackedBlock):
+        raise AssertionError(
+            "prose_key needs a tracked block; wrap the fixture through "
+            "instrument()/tracked() so the discharge is recorded against a ledger"
+        )
+    # Private access is deliberate: the ledger is this module's own state.
+    ledger = block._ledger
+    if key not in block._data:
+        raise AssertionError(
+            f"{block.fixture} [{block.block}]: prose_key({key!r}) names a key the "
+            f"fixture does not carry; the discharge has rotted"
+        )
+    if key not in ledger.declared_prose:
+        raise AssertionError(
+            f"{block.fixture} [{block.block}]: prose_key({key!r}) discharges a key "
+            f"`assertions.prose` does NOT declare. The corpus decides which keys "
+            f"are paragraphs — a binding that decides for itself is how four "
+            f"treatments of one rule went unnoticed. Declared here: "
+            f"{sorted(ledger.declared_prose)} (#lzprosekeyconvention)"
+        )
+    names = tuple(discharged_by)
+    if not names:
+        raise AssertionError(
+            f"{block.fixture} [{block.block}]: prose_key({key!r}) names NO "
+            f"discharging keys. A discharge that names nothing is the free-text "
+            f"excuse again with the text removed — it makes no claim the tracker "
+            f"can check (#lzprosekeyconvention)"
+        )
+    declared = _fixture_declared_prose(block.fixture)
+    prose_named = sorted(
+        name for name in names if name in declared or name == PROSE_DECLARATION_KEY
+    )
+    if prose_named:
+        raise AssertionError(
+            f"{block.fixture} [{block.block}]: prose_key({key!r}) is discharged by "
+            f"{prose_named}, which "
+            + ("is itself prose" if len(prose_named) == 1 else "are themselves prose")
+            + ". A paragraph cannot carry another paragraph's obligation; name an "
+            "EXECUTABLE key (#lzprosekeyconvention)"
+        )
+    ledger.seen.add(key)
+    ledger.discharged[key] = names
+    _PROSE_VERIFIED.setdefault(block.fixture, False)
+    return names
+
+
+def verify_prose(fixture: Any) -> None:
+    """Check this fixture's discharges once its replay is finished.
+
+    Rule 4 — the discharged set equals ``assertions.prose`` — is the comparison
+    that CONSUMES and ASSERTS the ``prose`` key itself, which is what makes a
+    forgotten paragraph fail rather than vanish. Rule 6 — every named key was
+    really asserted somewhere in this fixture's run — is the whole convention:
+    it turns "``epoch_disambiguation`` is prose" (not a claim) into
+    "``epoch_disambiguation`` is discharged by ``frame_epoch`` and ``blob_epoch``"
+    (a claim about the run, and one the tracker can falsify).
+
+    Call it at the end of the runner that replays the fixture. A fixture that
+    declares prose and is never verified is reported by
+    ``conftest.pytest_sessionfinish``, exactly as an unconsumed key is.
+    """
+    name = (
+        fixture
+        if isinstance(fixture, str)
+        else getattr(fixture, "conformance_name", "")
+    )
+    if not name:
+        raise AssertionError(
+            "verify_prose needs the corpus-relative fixture path; load the "
+            "fixture through instrument(name=...) or pass `name` explicitly"
+        )
+    asserted = _fixture_asserted(name)
+    problems: list[str] = []
+    for ledger in _fixture_ledgers(name):
+        if not ledger.declared_prose and not ledger.discharged:
+            continue
+        discharged = set(ledger.discharged)
+        # Reading `assertions.prose` for THIS comparison is what consumes it.
+        ledger.seen.add(PROSE_DECLARATION_KEY)
+        ledger.asserted.add(PROSE_DECLARATION_KEY)
+        missing = sorted(ledger.declared_prose - discharged)
+        extra = sorted(discharged - ledger.declared_prose)
+        if missing:
+            problems.append(
+                f"[{ledger.block}] prose key(s) {missing} are declared in "
+                f"`assertions.prose` but were never discharged"
+            )
+        if extra:
+            problems.append(
+                f"[{ledger.block}] key(s) {extra} were discharged but are not "
+                f"declared in `assertions.prose`"
+            )
+        for key, names in sorted(ledger.discharged.items()):
+            unasserted = sorted(set(names) - asserted)
+            if unasserted:
+                problems.append(
+                    f"[{ledger.block}] prose_key({key!r}) claims to be discharged "
+                    f"by {unasserted}, which this fixture's run never ASSERTED. "
+                    f"The claim is the point of the convention — an obligation "
+                    f"discharged by an assertion nobody makes is discharged by "
+                    f"nothing"
+                )
+    _PROSE_VERIFIED[name] = True
+    if problems:
+        raise AssertionError(
+            f"{name}: prose discharge verification failed "
+            f"(#lzprosekeyconvention)\n  " + "\n  ".join(problems)
+        )
+
+
+def discharged_prose(fixture: str) -> dict[str, dict[str, tuple[str, ...]]]:
+    """``{block: {prose key: named keys}}`` recorded for ``fixture`` so far."""
+    return {
+        ledger.block: dict(ledger.discharged)
+        for ledger in _fixture_ledgers(fixture)
+        if ledger.discharged
+    }
+
+
+def prose_failures() -> list[str]:
+    """Report lines for prose discharges the run never verified.
+
+    An unverified discharge claim is as unchecked as an unconsumed key: nothing
+    compared the discharged set against ``assertions.prose``, and nothing checked
+    that the named keys were asserted. Reported at session end for the same
+    reason the other rungs are — only then is the ledger complete.
+    """
+    lines: list[str] = []
+    for fixture, verified in sorted(_PROSE_VERIFIED.items()):
+        if verified:
+            continue
+        declared = sorted(_fixture_declared_prose(fixture))
+        claimed = sorted(
+            key for ledger in _fixture_ledgers(fixture) for key in ledger.discharged
+        )
+        lines.append(
+            f"{fixture}: `assertions.prose` declares {declared} and this run "
+            f"discharged {claimed}, but verify_prose({fixture!r}) never ran. An "
+            f"unverified discharge is an unchecked one — call verify_prose at the "
+            f"end of the runner that replays this fixture (#lzprosekeyconvention)"
+        )
+    return lines
+
+
 def tracked(
     data: Mapping[str, Any] | None,
     *,
@@ -453,12 +784,14 @@ def reset(fixture: str | None = None) -> None:
     if fixture is None:
         _LEDGERS.clear()
         _REPLAYED.clear()
+        _PROSE_VERIFIED.clear()
         _SCENARIO_EXCUSES.clear()
         _seed_scenario_excuses()
         return
     for key in [key for key in _LEDGERS if key[0] == fixture]:
         del _LEDGERS[key]
     _REPLAYED.pop(fixture, None)
+    _PROSE_VERIFIED.pop(fixture, None)
     _SCENARIO_EXCUSES.pop(fixture, None)
     if fixture in SCENARIO_EXCUSES:
         for scenario, reason in SCENARIO_EXCUSES[fixture].items():

@@ -70,7 +70,9 @@ from conformance_assert import (
     assert_key_with,
     excuse_key,
     instrument,
+    prose_key,
     scenarios,
+    verify_prose,
 )
 
 from lazily.ipc import (
@@ -223,63 +225,99 @@ def test_blob_backend_discriminator_conformance() -> None:
     block: TrackedBlock = fixture["assertions"]
     assert_key(block, "required_of_binding", "MUST")
 
-    # Prose. Each excuse names the assertion that carries the obligation the
-    # prose states — an excuse is a claim someone looked, not a way to skip.
-    excuse_key(
+    # Prose discharge (#lzprosekeyconvention). `assertions.prose` names the nine
+    # keys that state an obligation in English and carry nothing comparable; each
+    # is discharged by naming the EXECUTABLE keys this run really asserts. The
+    # free-text excuses these replace named the same assertions in a sentence,
+    # which was falsifiable in principle and checked by nothing — verify_prose at
+    # the bottom of this test is what checks it.
+    prose_key(
         block,
         "clause",
-        "prose: it states WHY the fixture is shaped this way; the behaviour it "
-        "describes is asserted by the per-scenario decode, re-encode and "
-        "rejection below",
+        # Both halves: omitted/null/known tokens decode (and do not flatten),
+        # unknown-present tokens are refused through the decode-error family and
+        # name the token.
+        discharged_by=[
+            "decoded_backend",
+            "rejected",
+            "rejection_is_decode_error",
+            "error_names_token",
+        ],
     )
-    for prose in ("wire_encoding", "anti_vacuity", "theorem", "generator"):
-        excuse_key(
-            block,
-            prose,
-            "prose: it states WHY the fixture is shaped this way; the behaviour it "
-            "describes is asserted by the per-scenario decode, re-encode and "
-            "rejection below",
-        )
-    excuse_key(
+    prose_key(
         block,
-        "reject_obligation",
-        "prose: the obligation it states — that the refusal NAME the token rather "
-        "than merely occur — is asserted by the `error_names_token` substring "
-        "check in the unknown_token arm of the reject branch",
+        "wire_encoding",
+        # The obligation is that the exact wire shape survives into the runner:
+        # `rejection_kind` is classified FROM the raw wire by
+        # _observed_rejection_kind, and `backend_forms` is compared against the
+        # forms actually replayed, so a runner reading a pre-parsed body fails
+        # both.
+        discharged_by=["backend_forms", "rejection_kind"],
     )
-    excuse_key(
+    prose_key(
         block,
         "backend_form_vocabulary",
-        "prose: the obligation it states — that every backend in "
-        "`assertions.backends` appear as some accept scenario's `decoded_backend` "
-        "— is asserted as a set difference in "
-        "_assert_backend_vocabulary_is_complete, and the seven wire shapes it "
-        "enumerates are asserted against the replayed forms via `backend_forms`",
+        # "every backend in `assertions.backends` appears as the
+        # `decoded_backend` of some accept scenario" — the set difference in
+        # _assert_backend_vocabulary_is_complete, plus the seven wire shapes.
+        discharged_by=["backends", "backend_forms", "decoded_backend"],
     )
-    excuse_key(
+    prose_key(
+        block,
+        "reject_obligation",
+        # "refused for the stated reason", not "refused".
+        discharged_by=["error_names_token"],
+    )
+    prose_key(
         block,
         "null_form",
-        "prose: the rule it states — an explicit null is the ABSENT form and "
-        "decodes as `shm`, and does not survive the round trip — is asserted by "
-        "the backend_null_{json,msgpack} scenarios' `decoded_backend` and "
-        "`reencoded_backend_field_present` expectations",
+        # An explicit null is the ABSENT form: it decodes as `shm` and does NOT
+        # survive the round trip.
+        discharged_by=["decoded_backend", "reencoded_backend_field_present"],
     )
-    excuse_key(
+    prose_key(
         block,
         "non_string_form",
-        "prose: the rule it states — a present non-string is refused, through the "
-        "SAME error family as the unknown token — is asserted by "
-        "`rejection_is_decode_error` against isinstance(error, ValueError) with "
-        "the raise caught as bare Exception, and by `rejection_kind` classified "
-        "from the wire",
+        # Refused, through the SAME family as the unknown token, and told apart
+        # from it by the kind classified off the wire.
+        discharged_by=["rejection_kind", "rejection_is_decode_error"],
     )
-    excuse_key(
+    prose_key(
         block,
         "epoch_disambiguation",
-        "prose: the distinction it draws is asserted by `frame_epoch` against "
-        "delta.epoch and `blob_epoch` against blob.epoch, which carry different "
-        "numbers (9 and 5), so a runner reading one where the other belongs is "
-        "now red",
+        # The two epochs are separate facts carrying different numbers (9, 5),
+        # asserted against their own sources.
+        discharged_by=["frame_epoch", "blob_epoch"],
+    )
+    prose_key(
+        block,
+        "anti_vacuity",
+        # The four controls in order: (1)+(2) a real decode that really reads the
+        # field, (3) the encoder half, (4) a complete vocabulary — plus the "two
+        # codecs are not two implementations" caveat, which is why `codecs` is
+        # compared against the codecs actually replayed.
+        discharged_by=[
+            "decoded_backend",
+            "reencoded_backend_field_present",
+            "backends",
+            "codecs",
+            "scenario_count",
+        ],
+    )
+    prose_key(
+        block,
+        "theorem",
+        # resolve_wrong_backend: normalizing an unknown kind ROUTES rather than
+        # refuses. `rejected` is the refusal, `decoded_backend` is the
+        # non-flattening of the known kinds.
+        discharged_by=["rejected", "decoded_backend"],
+    )
+    # NOT prose: a path this runner has nothing to compare against.
+    excuse_key(
+        block,
+        "generator",
+        "the fixture's provenance — the script that emitted it lives in "
+        "lazily-spec, so there is no lazily-py-side value to compare it to",
     )
 
     # Anti-vacuity, in the directions the fixture names. `accepted` and
@@ -440,3 +478,9 @@ def test_blob_backend_discriminator_conformance() -> None:
         "`arrow` and `in_process` frames may carry it, and a binding that echoes "
         "the received field back out writes it in six"
     )
+
+    # The fixture's replay is finished, so the discharge claims above can be
+    # checked: the discharged set against `assertions.prose` (which is what
+    # consumes that key), and every named key against what this run really
+    # asserted (#lzprosekeyconvention).
+    verify_prose(fixture)

@@ -4,6 +4,7 @@
   "kind": "FrameCodecRoundTrip",
   "codec": "json",
   "assertions": {
+    "prose": ["note"],
     "codec": "json",
     "self_describing": true,
     "byte_canonical": true,

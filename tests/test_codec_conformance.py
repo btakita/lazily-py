@@ -35,7 +35,14 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from conformance_assert import TrackedBlock, assert_key, instrument, scenarios
+from conformance_assert import (
+    TrackedBlock,
+    assert_key,
+    instrument,
+    prose_key,
+    scenarios,
+    verify_prose,
+)
 
 from lazily.ipc import IpcMessage, NodeState_Opaque, NodeState_Payload
 from lazily.msgpack_codec import msgpack_unpack
@@ -55,7 +62,11 @@ _MSGPACK_FIXTURE = "codec/frame_roundtrip_msgpack.json"
 def _load(name: str) -> dict:
     spec_path = _SPEC_FIXTURES / name
     path = spec_path if spec_path.exists() else _LOCAL_FIXTURES / name
-    fixture = instrument(json.loads(path.read_text()), name=name, prose=("note",))
+    # No `prose=("note",)` here any more. These fixtures DECLARE `note` in
+    # `assertions.prose`, and a declared key states an obligation rather than
+    # annotating one — the blanket by-name exemption is exactly what would let a
+    # real rule hide behind a reserved name (#lzprosekeyconvention).
+    fixture = instrument(json.loads(path.read_text()), name=name)
     assert fixture["protocol_version"] == 1
     assert fixture["kind"] == "FrameCodecRoundTrip"
     return fixture
@@ -78,6 +89,26 @@ def _assert_fixture_block(fixture: dict, codec: str, byte_canonical: bool) -> No
         "reference" if codec == "json" else "cross_language_binary_default",
     )
     assert_key(block, "scenario_count", len(fixture["scenarios"]))
+
+    # `note` is a DECLARED prose key here (#lzprosekeyconvention), not
+    # narration. The two fixtures state DIFFERENT obligations under that one
+    # name, so they discharge differently rather than sharing a form of words:
+    #
+    # * json — "`role` is the codec's ROLE ... `byte_canonical` is a separate
+    #   property of codec+message ... both are pinned here so a runner cannot
+    #   conflate them";
+    # * msgpack — "`byte_canonical: false` is the whole reason this fixture pins
+    #   decoded values instead of golden bytes ... it is what
+    #   `encoded_body_field_names` below verifies".
+    prose_key(
+        block,
+        "note",
+        discharged_by=(
+            ["role", "byte_canonical"]
+            if codec == "json"
+            else ["byte_canonical", "encoded_body_field_names"]
+        ),
+    )
 
 
 def _variant(message: IpcMessage) -> str:
@@ -247,6 +278,7 @@ def test_json_frames_round_trip() -> None:
         IpcMessage.encode_json,
         IpcMessage.decode_json,
     )
+    verify_prose(fixture)
 
 
 def test_msgpack_frames_round_trip() -> None:
@@ -266,3 +298,4 @@ def test_msgpack_frames_round_trip() -> None:
         IpcMessage.decode_msgpack,
         _assert_msgpack_encoding,
     )
+    verify_prose(fixture)

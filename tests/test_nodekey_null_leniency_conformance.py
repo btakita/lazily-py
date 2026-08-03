@@ -28,9 +28,12 @@ from pathlib import Path
 from conformance_assert import (
     TrackedBlock,
     assert_key,
+    assert_key_with,
     excuse_key,
     instrument,
+    prose_key,
     scenarios,
+    verify_prose,
 )
 
 from lazily.ipc import DeltaOp_NodeAdd, IpcMessage
@@ -104,33 +107,63 @@ def test_nodekey_null_leniency_conformance() -> None:
 
     block: TrackedBlock = fixture["assertions"]
     assert_key(block, "required_of_binding", "MUST")
-    assert_key(block, "codecs", ["json", "msgpack"])
-    assert_key(block, "fields", ["snapshot", "node_add"])
-    assert_key(block, "key_forms", ["omitted", "null", "present"])
-    assert_key(block, "scenario_count", len(fixture["scenarios"]))
-    for prose in (
+
+    # Prose discharge (#lzprosekeyconvention). Each names the executable keys
+    # this run really asserts; verify_prose at the bottom checks the naming.
+    prose_key(
+        block,
         "clause",
+        # "accept both forms as absent, refusing neither and constructing a key
+        # from neither" is the decode half; "omit-when-absent binds the ENCODER"
+        # is the re-encode half, which no assertion over a decoded value reaches.
+        discharged_by=["decoded_key", "reencoded_key_field_present"],
+    )
+    prose_key(
+        block,
         "wire_encoding",
+        # "a pre-parsed object cannot express the difference between the two":
+        # the three wire forms are compared against the forms really replayed,
+        # and each one's decoded key is asserted separately.
+        discharged_by=["key_forms", "decoded_key"],
+    )
+    prose_key(
+        block,
         "reencode_obligation",
+        # "A runner MUST re-encode the decoded message and inspect the resulting
+        # frame for the presence of the field."
+        discharged_by=["reencoded_key_field_present"],
+    )
+    prose_key(
+        block,
         "anti_vacuity",
+        # "`present` forces a real key through and `omitted` forces a real
+        # decode" — `decoded_key` is the only key that separates them, and
+        # `scenario_count` is compared against the frames really replayed.
+        discharged_by=["decoded_key", "scenario_count"],
+    )
+    # NOT prose: a provenance path with no lazily-py-side value to compare.
+    excuse_key(
+        block,
         "generator",
-    ):
-        excuse_key(
-            block,
-            prose,
-            "prose: it states WHY the fixture is shaped this way; the behaviour it "
-            "describes is asserted by the per-scenario decode and re-encode below",
-        )
+        "the fixture's provenance — the script that emitted it lives in "
+        "lazily-spec, so there is no lazily-py-side value to compare it to",
+    )
 
     # Anti-vacuity in both directions. A runner that never decodes reports
     # "absent" for everything and satisfies all eight omitted/null scenarios; the
     # `present` count is what only a real decode can produce.
     keys_decoded = 0
     replayed = 0
+    observed_fields: set[str] = set()
+    observed_key_forms: set[str] = set()
+    observed_codecs: set[str] = set()
 
     for scenario in scenarios(fixture):
         expect: TrackedBlock = scenario["expect"]
         replayed += 1
+        observed_fields.add(scenario["field"])
+        observed_key_forms.add(scenario["key_form"])
+        observed_codecs.add(scenario["codec"])
 
         message = _decode(scenario)
         key = _decoded_key(scenario, message)
@@ -159,3 +192,30 @@ def test_nodekey_null_leniency_conformance() -> None:
         f"decoded {keys_decoded} keys, want 4: only the `present` scenarios carry one, "
         "so a runner reporting absent for everything satisfies the null cases trivially"
     )
+
+    # Against what the run REPLAYED, not against hand-written literals and not
+    # against len(fixture["scenarios"]) — the old forms compared the fixture to a
+    # constant or to itself, so a runner that stopped replaying a wire form or a
+    # field stayed green on exactly the keys `anti_vacuity` and `wire_encoding`
+    # now cite.
+    assert_key(block, "scenario_count", replayed)
+    assert_key_with(
+        block,
+        "codecs",
+        lambda want: sorted(want) == sorted(observed_codecs),
+        where=f"replayed codecs {sorted(observed_codecs)}",
+    )
+    assert_key_with(
+        block,
+        "fields",
+        lambda want: sorted(want) == sorted(observed_fields),
+        where=f"replayed fields {sorted(observed_fields)}",
+    )
+    assert_key_with(
+        block,
+        "key_forms",
+        lambda want: sorted(want) == sorted(observed_key_forms),
+        where=f"replayed key forms {sorted(observed_key_forms)}",
+    )
+
+    verify_prose(fixture)

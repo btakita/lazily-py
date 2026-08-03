@@ -4,6 +4,7 @@
   "kind": "FrameCodecRoundTrip",
   "codec": "msgpack",
   "assertions": {
+    "prose": ["note"],
     "codec": "msgpack",
     "self_describing": true,
     "byte_canonical": false,

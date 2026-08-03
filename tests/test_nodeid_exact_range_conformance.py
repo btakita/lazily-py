@@ -30,7 +30,9 @@ from conformance_assert import (
     assert_key_with,
     excuse_key,
     instrument,
+    prose_key,
     scenarios,
+    verify_prose,
 )
 
 from lazily.ipc import IpcMessage, NodeState_Payload
@@ -74,21 +76,51 @@ def test_nodeid_exact_range_conformance() -> None:
 
     block: TrackedBlock = fixture["assertions"]
     assert_key(block, "required_of_binding", "MUST")
-    assert_key(block, "codecs", ["json", "msgpack"])
-    assert_key(block, "scenario_count", len(fixture["scenarios"]))
-    for prose in ("clause", "wire_encoding", "outcomes", "anti_vacuity", "generator"):
-        excuse_key(
-            block,
-            prose,
-            "prose: it states WHY the fixture is shaped this way; the behaviour it "
-            "describes is asserted by the per-scenario decode below",
-        )
+
+    # Prose discharge (#lzprosekeyconvention). Each names the executable keys
+    # this run really asserts; verify_prose at the bottom checks the naming.
+    prose_key(
+        block,
+        "clause",
+        # "MUST NOT round, truncate, saturate, or wrap": a rounding decoder
+        # yields a NEIGHBOURING identifier that still decodes cleanly, so only
+        # the decimal rendering sees the substitution. `outcome` is the branch
+        # the clause allows a narrower decoder to take.
+        discharged_by=["node_id_decimal", "outcome"],
+    )
+    prose_key(
+        block,
+        "wire_encoding",
+        # "MUST compare the decoded identifier by its decimal rendering" — for
+        # the node and for the root, both of which carry the boundary value.
+        discharged_by=["node_id_decimal", "root_id_decimal"],
+    )
+    prose_key(
+        block,
+        "anti_vacuity",
+        # "the two `exact` scenarios are the control ... a binding must prove it
+        # decodes the boundary value correctly before its refusals count":
+        # `scenario_count` is compared against the number of frames this run
+        # really DECODED, not against len(scenarios).
+        discharged_by=["scenario_count", "node_id_decimal", "outcome"],
+    )
+    # NOT prose: `outcomes` maps a vocabulary to English glosses, so the
+    # assertion is the KEY SET and the parent key's own assertion discharges it.
+    # `generator` is a provenance path with no lazily-py-side value to compare.
+    excuse_key(
+        block,
+        "generator",
+        "the fixture's provenance — the script that emitted it lives in "
+        "lazily-spec, so there is no lazily-py-side value to compare it to",
+    )
 
     # Anti-vacuity. `exact_or_reject` is satisfied by a runner that decodes
     # nothing, so the count of scenarios this run actually ACCEPTED is the
     # assertion that the decoder ran. Python's range covers the corpus, so the
     # expected value is every scenario — anything less is a narrowing.
     accepted = 0
+    observed_codecs: set[str] = set()
+    observed_outcomes: set[str] = set()
 
     for scenario in scenarios(fixture):
         expect: TrackedBlock = scenario["expect"]
@@ -97,11 +129,14 @@ def test_nodeid_exact_range_conformance() -> None:
         # `outcome` is the corpus-wide statement of what a decoder may do.
         # lazily-py reads it as a constraint on the fixture: both branches
         # oblige it to decode, because it can represent everything.
-        assert_key_with(
-            expect,
-            "outcome",
-            lambda want: want in ("exact", "exact_or_reject"),
+        observed_outcomes.add(
+            assert_key_with(
+                expect,
+                "outcome",
+                lambda want: want in ("exact", "exact_or_reject"),
+            )
         )
+        observed_codecs.add(scenario["codec"])
 
         message = _decode(scenario)
         accepted += 1
@@ -137,3 +172,19 @@ def test_nodeid_exact_range_conformance() -> None:
         f"accepted {accepted} scenarios, want 6: a Python int is arbitrary-precision, "
         "so lazily-py has no identifier in this corpus it may refuse"
     )
+    # Against what the run DECODED, not against len(fixture["scenarios"]) — the
+    # old form compared the fixture to itself and stayed green over a runner that
+    # decoded nothing, which is the very vacuity `anti_vacuity` names and now
+    # cites this key for.
+    assert_key(block, "scenario_count", accepted)
+    assert_key(block, "codecs", sorted(observed_codecs))
+    # `outcomes` is a vocabulary mapped to English glosses, not a prose key: the
+    # assertion is its KEY SET, checked against the outcomes really replayed.
+    assert_key_with(
+        block,
+        "outcomes",
+        lambda want: sorted(want) == sorted(observed_outcomes),
+        where=f"replayed outcomes {sorted(observed_outcomes)}",
+    )
+
+    verify_prose(fixture)

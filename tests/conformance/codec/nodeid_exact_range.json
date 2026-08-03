@@ -3,6 +3,11 @@
   "protocol_version": 1,
   "kind": "NodeIdExactRange",
   "assertions": {
+    "prose": [
+      "clause",
+      "wire_encoding",
+      "anti_vacuity"
+    ],
     "clause": "a decoder that cannot represent a received NodeId/PeerId exactly MUST reject the frame; it MUST NOT round, truncate, saturate, or wrap",
     "required_of_binding": "MUST",
     "codecs": [

@@ -19,7 +19,11 @@ import os
 import sys
 from pathlib import Path
 
-from conformance_assert import consumption_failures, scenario_failures
+from conformance_assert import (
+    consumption_failures,
+    prose_failures,
+    scenario_failures,
+)
 
 
 _MANIFEST = os.environ.get("LAZILY_CONFORMANCE_MANIFEST")
@@ -133,6 +137,28 @@ def pytest_sessionfinish(session, exitstatus) -> None:  # type: ignore[no-untype
         report += [f"  {line}" for line in failures]
         report.append("")
 
+    # The arming seam for the prose-discharge ledger (#lzprosekeyconvention).
+    # `verify_prose` is what compares the discharged set against
+    # `assertions.prose` and checks that every named key was really asserted, so
+    # a run that never calls it has an unchecked claim sitting in the ledger —
+    # exactly as bad as an unconsumed key, and reported the same way. Landing it
+    # here rather than in a per-test teardown matches the other rungs: the ledger
+    # is fixture-scoped and session-wide, because a paragraph in `assertions` is
+    # routinely discharged by an `expect` key asserted much later in the replay.
+    prose_bad = prose_failures()
+    if prose_bad:
+        report += [
+            "",
+            "CONFORMANCE PROSE DISCHARGE NEVER VERIFIED (#lzprosekeyconvention)",
+            "  A fixture declares prose keys — English obligations the corpus names",
+            "  in `assertions.prose` — and this run never verified how they were",
+            "  discharged. Call verify_prose(fixture) at the end of the runner that",
+            "  replays it.",
+            "",
+        ]
+        report += [f"  {line}" for line in prose_bad]
+        report.append("")
+
     scenario_bad, scenario_notes = scenario_failures(_opened)
     if scenario_notes:
         report += ["", "CONFORMANCE SCENARIO LEDGER NOTICES (#lzscenariocoverage)", ""]
@@ -158,5 +184,5 @@ def pytest_sessionfinish(session, exitstatus) -> None:  # type: ignore[no-untype
 
     if report:
         sys.stderr.write("\n".join(report) + "\n")
-    if (failures or scenario_bad or vacuous) and exitstatus == 0:
+    if (failures or prose_bad or scenario_bad or vacuous) and exitstatus == 0:
         session.exitstatus = 1

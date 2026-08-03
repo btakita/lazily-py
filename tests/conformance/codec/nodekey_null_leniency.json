@@ -3,6 +3,12 @@
   "protocol_version": 1,
   "kind": "NodeKeyNullLeniency",
   "assertions": {
+    "prose": [
+      "clause",
+      "wire_encoding",
+      "reencode_obligation",
+      "anti_vacuity"
+    ],
     "clause": "omit-when-absent binds the ENCODER; a decoder MUST accept both an omitted `key` and an explicit `key: null` and read both as absent, refusing neither and constructing a key from neither",
     "required_of_binding": "MUST",
     "codecs": [

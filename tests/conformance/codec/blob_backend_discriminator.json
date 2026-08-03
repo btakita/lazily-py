@@ -3,6 +3,17 @@
   "protocol_version": 1,
   "kind": "BlobBackendDiscriminator",
   "assertions": {
+    "prose": [
+      "clause",
+      "wire_encoding",
+      "backend_form_vocabulary",
+      "reject_obligation",
+      "null_form",
+      "non_string_form",
+      "epoch_disambiguation",
+      "anti_vacuity",
+      "theorem"
+    ],
     "clause": "an OMITTED or NULL `backend` MUST decode as `shm`; a PRESENT `backend` that is not one of {shm, arrow, in_process} MUST be rejected through the codec's documented decode-error family \u2014 naming the token when there is one \u2014 and MUST NOT be normalized to `shm` or to any other backend",
     "required_of_binding": "MUST",
     "codecs": [

@@ -29,6 +29,8 @@ from conformance_assert import (
     excuse_key,
     excuse_scenario,
     instrument,
+    prose_failures,
+    prose_key,
     record_scenario,
     replayed_scenarios,
     reset,
@@ -36,6 +38,7 @@ from conformance_assert import (
     scenario_id,
     scenarios,
     tracked,
+    verify_prose,
 )
 
 
@@ -200,6 +203,268 @@ def test_a_stale_excuse_is_reported() -> None:
     assert "outbox store protocol runner" in reported[0]
 
     reset(fixture="selftest/stale.json")
+
+
+# ---------------------------------------------------------------------------
+# Declared prose keys: discharged, never asserted, never excused
+# (#lzprosekeyconvention)
+#
+# One test per failure mode the convention names. These are the rules that make
+# a discharge a CLAIM rather than a form of words, so a rule that quietly stops
+# firing puts lazily-py back where the nine bindings started: four defensible
+# treatments of one key, indistinguishable from four accidents.
+# ---------------------------------------------------------------------------
+
+_PROSE_FIXTURE = "selftest/prose_convention.json"
+
+
+def _prose_block(**extra: object) -> TrackedBlock:
+    """A block declaring one prose key plus an executable sibling."""
+    data: dict[str, object] = {
+        "prose": ["clause"],
+        "clause": "a decoder MUST reject rather than round",
+        "node_id_decimal": "9007199254740993",
+    }
+    data.update(extra)
+    return tracked(data, fixture=_PROSE_FIXTURE)
+
+
+def test_prose_key_discharged_by_an_asserted_key_verifies() -> None:
+    """The happy path: the naming is checked, and `prose` itself is consumed."""
+    block = _prose_block()
+    prose_key(block, "clause", discharged_by=["node_id_decimal"])
+    assert_key(block, "node_id_decimal", "9007199254740993")
+    verify_prose(_PROSE_FIXTURE)
+
+    assert block.unconsumed() == []
+    assert not _report(_PROSE_FIXTURE)
+    assert not [line for line in prose_failures() if line.startswith(_PROSE_FIXTURE)]
+
+    reset(fixture=_PROSE_FIXTURE)
+
+
+def test_rule_1_asserting_a_declared_prose_key_fails() -> None:
+    """Comparing a paragraph to a literal pins WORDING, not behaviour."""
+    block = _prose_block()
+    with pytest.raises(AssertionError, match="would ASSERT prose key"):
+        assert_key(block, "clause", "a decoder MUST reject rather than round")
+
+    # Same verdict through whole-block equality, which asserts every key at once
+    # and would otherwise be the way around rule 1.
+    with pytest.raises(AssertionError, match="would ASSERT prose key"):
+        assert block == {}
+
+    reset(fixture=_PROSE_FIXTURE)
+
+
+def test_rule_2_excusing_a_declared_prose_key_with_free_text_fails() -> None:
+    """The form lazily-py used to write: falsifiable in principle, checked by
+    nothing."""
+    block = _prose_block()
+    with pytest.raises(AssertionError, match="free-text excuse for a key"):
+        excuse_key(
+            block,
+            "clause",
+            "prose: the behaviour it describes is asserted by the decode below",
+        )
+
+    reset(fixture=_PROSE_FIXTURE)
+
+
+def test_rule_3_discharging_an_undeclared_key_fails() -> None:
+    """The corpus decides which keys are paragraphs; a binding must not."""
+    block = _prose_block()
+    with pytest.raises(AssertionError, match="does NOT declare"):
+        prose_key(block, "node_id_decimal", discharged_by=["clause"])
+
+    reset(fixture=_PROSE_FIXTURE)
+
+
+def test_rule_3_discharging_a_key_the_fixture_lacks_has_rotted() -> None:
+    block = _prose_block()
+    with pytest.raises(AssertionError, match="the discharge has rotted"):
+        prose_key(block, "renamed_upstream", discharged_by=["node_id_decimal"])
+
+    reset(fixture=_PROSE_FIXTURE)
+
+
+def test_rule_4_a_forgotten_prose_key_fails_verification() -> None:
+    """The comparison that consumes `prose` — and makes a forgotten key fail
+    rather than vanish."""
+    block = tracked(
+        {
+            "prose": ["clause", "anti_vacuity"],
+            "clause": "a decoder MUST reject rather than round",
+            "anti_vacuity": "the two exact scenarios are the control",
+            "node_id_decimal": "9007199254740993",
+        },
+        fixture=_PROSE_FIXTURE,
+    )
+    prose_key(block, "clause", discharged_by=["node_id_decimal"])
+    assert_key(block, "node_id_decimal", "9007199254740993")
+
+    with pytest.raises(AssertionError, match=r"\['anti_vacuity'\].*never discharged"):
+        verify_prose(_PROSE_FIXTURE)
+
+    reset(fixture=_PROSE_FIXTURE)
+
+
+def test_rule_5_a_discharge_naming_nothing_fails() -> None:
+    """A discharge that names nothing is the free-text excuse with the text
+    removed."""
+    block = _prose_block()
+    with pytest.raises(AssertionError, match="names NO"):
+        prose_key(block, "clause", discharged_by=[])
+
+    reset(fixture=_PROSE_FIXTURE)
+
+
+def test_rule_6_a_discharge_naming_a_never_asserted_key_fails() -> None:
+    """The whole convention: the excuse becomes falsifiable, so falsify it."""
+    block = _prose_block()
+    prose_key(block, "clause", discharged_by=["node_id_decimal"])
+    # ...and then never assert it.
+
+    with pytest.raises(AssertionError, match="never ASSERTED"):
+        verify_prose(_PROSE_FIXTURE)
+
+    reset(fixture=_PROSE_FIXTURE)
+
+
+def test_rule_6_matches_by_key_name_in_any_block_of_the_fixture() -> None:
+    """Fixture-scoped, not block-scoped: `epoch_disambiguation` sits in
+    `assertions` and is discharged by `expect.frame_epoch`, asserted long after
+    that block is finished."""
+    fixture = instrument(
+        {
+            "assertions": {
+                "prose": ["epoch_disambiguation"],
+                "epoch_disambiguation": "frame_epoch and blob_epoch are DIFFERENT",
+                "scenario_count": 1,
+            },
+            "scenarios": [
+                {"id": "only", "expect": {"frame_epoch": 9, "blob_epoch": 5}}
+            ],
+        },
+        name=_PROSE_FIXTURE,
+    )
+    block = fixture["assertions"]
+    prose_key(
+        block, "epoch_disambiguation", discharged_by=["frame_epoch", "blob_epoch"]
+    )
+    assert_key(block, "scenario_count", 1)
+
+    expect = fixture["scenarios"][0]["expect"]
+    assert_key(expect, "frame_epoch", 9)
+    assert_key(expect, "blob_epoch", 5)
+
+    verify_prose(fixture)
+    assert not _report(_PROSE_FIXTURE)
+
+    reset(fixture=_PROSE_FIXTURE)
+
+
+def test_rule_7_a_discharge_naming_another_prose_key_fails() -> None:
+    """A paragraph cannot carry another paragraph's obligation."""
+    block = tracked(
+        {
+            "prose": ["clause", "theorem"],
+            "clause": "a decoder MUST reject rather than round",
+            "theorem": "resolve_wrong_backend — receivers route by kind",
+            "node_id_decimal": "9007199254740993",
+        },
+        fixture=_PROSE_FIXTURE,
+    )
+    with pytest.raises(AssertionError, match="is itself prose"):
+        prose_key(block, "clause", discharged_by=["theorem"])
+    # Self-naming is the same failure, and is caught by the same rule.
+    with pytest.raises(AssertionError, match="is itself prose"):
+        prose_key(block, "clause", discharged_by=["clause"])
+
+    reset(fixture=_PROSE_FIXTURE)
+
+
+def test_a_run_that_never_verifies_is_reported() -> None:
+    """An unverified discharge claim is as unchecked as an unconsumed key."""
+    block = _prose_block()
+    prose_key(block, "clause", discharged_by=["node_id_decimal"])
+    assert_key(block, "node_id_decimal", "9007199254740993")
+
+    reported = [line for line in prose_failures() if line.startswith(_PROSE_FIXTURE)]
+    assert reported, "an unverified prose discharge produced no report line"
+    assert "verify_prose" in reported[0]
+
+    verify_prose(_PROSE_FIXTURE)
+    assert not [line for line in prose_failures() if line.startswith(_PROSE_FIXTURE)]
+
+    reset(fixture=_PROSE_FIXTURE)
+
+
+def test_a_declaring_block_is_reported_when_nothing_discharges_at_all() -> None:
+    """A runner that ignores `assertions.prose` entirely: `prose` is an
+    unconsumed key AND the fixture is unverified. Self-enforcing rollout."""
+    block = _prose_block()
+    assert_key(block, "node_id_decimal", "9007199254740993")
+
+    assert block.unconsumed() == ["clause", "prose"]
+    reported = _report(_PROSE_FIXTURE)
+    assert reported and "'clause', 'prose'" in reported[0]
+    assert [line for line in prose_failures() if line.startswith(_PROSE_FIXTURE)]
+
+    reset(fixture=_PROSE_FIXTURE)
+
+
+def test_a_declared_key_is_not_satisfied_by_the_reserved_name_exemption() -> None:
+    """`note` is exempt BY NAME as an annotation, and that exemption stops at
+    the block's own declaration — otherwise a reserved name is a place no runner
+    can be made to discharge anything, which is the hazard the convention calls
+    out. ``frame_roundtrip_json.json``'s top-level `note` is a real rule."""
+    block = tracked(
+        {
+            "prose": ["note"],
+            "note": "`role` and `byte_canonical` are different senses of canonical",
+            "role": "reference",
+        },
+        fixture=_PROSE_FIXTURE,
+        prose=("note",),
+    )
+    assert_key(block, "role", "reference")
+    assert block.unconsumed() == ["note", "prose"]
+
+    prose_key(block, "note", discharged_by=["role"])
+    verify_prose(_PROSE_FIXTURE)
+    assert block.unconsumed() == []
+
+    reset(fixture=_PROSE_FIXTURE)
+
+
+def test_an_undeclared_step_note_stays_exempt_by_name() -> None:
+    """The ~97 reactive-graph step notes are annotations and must not churn."""
+    fixture = instrument(
+        {
+            "steps": [
+                {
+                    "name": "first",
+                    "expect": {"note": "teardown is idempotent", "value": 1},
+                }
+            ]
+        },
+        name="selftest/step_note.json",
+    )
+    block = fixture["steps"][0]["expect"]
+    assert_key(block, "value", 1)
+    assert block.unconsumed() == []
+    assert not _report("selftest/step_note.json")
+    assert not [
+        line for line in prose_failures() if line.startswith("selftest/step_note.json")
+    ]
+
+    reset(fixture="selftest/step_note.json")
+
+
+def test_verify_prose_needs_a_named_fixture() -> None:
+    with pytest.raises(AssertionError, match="corpus-relative fixture path"):
+        verify_prose({"assertions": {}})
 
 
 # ---------------------------------------------------------------------------
