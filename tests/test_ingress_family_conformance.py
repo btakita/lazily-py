@@ -251,7 +251,7 @@ def _materialize(cell: Any, keys: list[str]) -> None:
 
 def _assert_invalidation(
     where: str,
-    want: dict[str, Any],
+    expected: Any,
     before: dict[str, bool],
     after: dict[str, bool],
 ) -> None:
@@ -259,22 +259,42 @@ def _assert_invalidation(
 
     ``True`` means the reader's cache went from valid to invalid across the op;
     ``False`` means it stayed valid.
+
+    The matrix is three objects deep — ``invalidates.scopes.<key>.<reader kind>``
+    — so the descent runs three levels (#lzsubblockkeyset). Each level hands back
+    a child tracker that owns its own key set, and the two key-set assertions
+    below close the other direction: a reader kind or a receipt channel the
+    corpus adds is compared by this probe or it fails, never by nothing.
     """
-    for key, want_scope in want["scopes"].items():
+    invalidates = expected.sub("invalidates")
+
+    scopes = invalidates.sub("scopes")
+    for key in sorted(scopes):
+        want_scope = scopes.sub(key)
+        assert sorted(want_scope) == sorted(READER_KINDS), (
+            f"{where}: invalidates.scopes.{key} names {sorted(want_scope)}, but "
+            f"this probe measures {sorted(READER_KINDS)}"
+        )
         for kind in READER_KINDS:
             probe = f"{key}.{kind}"
-            expected = want_scope[kind]
+            want_flag = assert_key_with(want_scope, kind, where=where)
             invalidated = before[probe] and not after[probe]
-            assert invalidated is expected, (
+            assert invalidated is want_flag, (
                 f"{where}: {probe} invalidation is {invalidated}, expected "
-                f"{expected} (was valid={before[probe]}, now valid={after[probe]})"
+                f"{want_flag} (was valid={before[probe]}, now valid={after[probe]})"
             )
+
+    receipts = invalidates.sub("receipts")
+    assert sorted(receipts) == sorted(RECEIPT_CHANNELS), (
+        f"{where}: invalidates.receipts names {sorted(receipts)}, but this probe "
+        f"measures {sorted(RECEIPT_CHANNELS)}"
+    )
     for channel in RECEIPT_CHANNELS:
         probe = f"receipts.{channel}"
-        expected = want["receipts"][channel]
+        want_flag = assert_key_with(receipts, channel, where=where)
         invalidated = before[probe] and not after[probe]
-        assert invalidated is expected, (
-            f"{where}: {probe} invalidation is {invalidated}, expected {expected}"
+        assert invalidated is want_flag, (
+            f"{where}: {probe} invalidation is {invalidated}, expected {want_flag}"
         )
 
 
@@ -283,48 +303,58 @@ def _assert_invalidation(
 # ---------------------------------------------------------------------------
 
 
-def _assert_scope_state(where: str, cell: Any, key: str, want: dict[str, Any]) -> None:
+def _assert_scope_state(where: str, cell: Any, key: str, want: Any) -> None:
+    """Assert one scope's state, with ``want`` a CHILD tracker over its object.
+
+    Every field goes through ``assert_key`` rather than a bare ``want["field"]``
+    comparison, so the scope object's own key set is owned by a ledger: a field
+    the corpus adds to a scope fails as unconsumed instead of being read by
+    nobody (#lzsubblockkeyset). ``authority`` and ``retry`` are objects again
+    when present, so the descent continues into them.
+    """
     view = cell.view(key)
     assert view is not None, f"{where}: scope {key!r} absent"
-    assert view.lifecycle == want["lifecycle"], f"{where}: {key} lifecycle"
-    assert view.generation == want["generation"], f"{where}: {key} generation"
-    assert view.delivered_through == want["delivered_through"], (
-        f"{where}: {key} watermark"
-    )
-    assert view.buffered == want["buffered"], f"{where}: {key} buffered"
-    assert view.consecutive_errors == want["consecutive_errors"], (
-        f"{where}: {key} consecutive errors"
-    )
-    assert cell.value(key) == want["window"], f"{where}: {key} window"
-    assert cell.readiness(key) == want["readiness"], f"{where}: {key} readiness"
+    site = f"{where}: {key}"
+    assert_key(want, "lifecycle", view.lifecycle, where=site)
+    assert_key(want, "generation", view.generation, where=site)
+    assert_key(want, "delivered_through", view.delivered_through, where=site)
+    assert_key(want, "buffered", view.buffered, where=site)
+    assert_key(want, "consecutive_errors", view.consecutive_errors, where=site)
+    assert_key(want, "window", cell.value(key), where=site)
+    assert_key(want, "readiness", cell.readiness(key), where=site)
 
-    want_authority = want["authority"]
     authority = cell.authority(key)
-    if want_authority is None:
-        assert authority is None, f"{where}: {key} authority"
+    if want["authority"] is None:
+        assert_key(want, "authority", None, where=site)
+        assert authority is None, f"{site} authority"
     else:
-        assert authority == lazily.IngressAuthority(
-            want_authority["generation"],
-            want_authority["delivered_through"],
-            want_authority["stamped_at"],
-        ), f"{where}: {key} authority"
+        want_authority = want.sub("authority")
+        assert authority is not None, f"{site} authority is absent"
+        assert_key(want_authority, "generation", authority.generation, where=site)
+        assert_key(
+            want_authority,
+            "delivered_through",
+            authority.delivered_through,
+            where=site,
+        )
+        assert_key(want_authority, "stamped_at", authority.stamped_at, where=site)
 
-    want_retry = want["retry"]
     retry = cell.retry(key)
-    if want_retry is None:
-        assert retry is None, f"{where}: {key} retry"
+    if want["retry"] is None:
+        assert_key(want, "retry", None, where=site)
+        assert retry is None, f"{site} retry"
     else:
-        assert retry == lazily.IngressRetry(
-            want_retry["attempt"], want_retry["backoff"], want_retry["resume_from"]
-        ), f"{where}: {key} retry"
+        want_retry = want.sub("retry")
+        assert retry is not None, f"{site} retry is absent"
+        assert_key(want_retry, "attempt", retry.attempt, where=site)
+        assert_key(want_retry, "backoff", retry.backoff, where=site)
+        assert_key(want_retry, "resume_from", retry.resume_from, where=site)
 
 
-def _assert_state(where: str, cell: Any, expected: dict[str, Any]) -> None:
-    def _scopes(want: dict[str, Any]) -> None:
-        for key, want_scope in want.items():
-            _assert_scope_state(where, cell, key, want_scope)
-
-    assert_key_with(expected, "scopes", _scopes, where=where)
+def _assert_state(where: str, cell: Any, expected: Any) -> None:
+    scopes = expected.sub("scopes")
+    for key in sorted(scopes):
+        _assert_scope_state(where, cell, key, scopes.sub(key))
     assert_key(
         expected,
         "receipts",
@@ -415,9 +445,6 @@ def _replay(flavor: type[_Flavor], fixture_name: str) -> int:
         expected = step.get("expected")
         assert expected is not None, f"{where}: expected block is missing"
         assert "invalidates" in expected, f"{where}: invalidation matrix is missing"
-        # `_assert_invalidation` compares every probe against this matrix, so the
-        # read here books the assertion (#lzconsumednotasserted).
-        invalidates = assert_key_with(expected, "invalidates", where=where)
 
         before = _snapshot(cell, keys)
         actual = _apply_op(where, cell, step["op"])
@@ -427,7 +454,7 @@ def _replay(flavor: type[_Flavor], fixture_name: str) -> int:
         if "returns" in step:
             _assert_returns(where, actual, step["returns"])
         _assert_state(where, cell, expected)
-        _assert_invalidation(where, invalidates, before, after)
+        _assert_invalidation(where, expected, before, after)
         _materialize(cell, keys)
 
     return len(steps)

@@ -71,8 +71,11 @@ from typing import Any
 
 import pytest
 from conformance_assert import (
+    assert_key,
     assert_key_with,
+    excuse_key,
     instrument,
+    sub_entries,
 )
 from conformance_assert import (
     scenarios as replay_scenarios,
@@ -950,14 +953,17 @@ async def _replay(
             if key == "note":
                 continue
             if key == "dependents_of":
-                for node_id, degree in want.items():
+                # DESCEND (#lzsubblockkeyset): the map's own key set is owned by
+                # a child tracker, so a node the corpus adds to it fails as
+                # unconsumed instead of being compared by nothing.
+                for node_id, degree in sub_entries(expect, key):
                     check(
                         f"dependents_of.{node_id}",
                         model.dependents_of(node_of(node_id)),
                         degree,
                     )
             elif key == "dependencies_of":
-                for node_id, degree in want.items():
+                for node_id, degree in sub_entries(expect, key):
                     check(
                         f"dependencies_of.{node_id}",
                         model.dependencies_of(node_of(node_id)),
@@ -974,7 +980,7 @@ async def _replay(
                 # synthesized compute itself. Sorts before `readable` and
                 # `value`, which matters: those keys read, and a read of a
                 # de-eagered signal recomputes.
-                for node_id, count in want.items():
+                for node_id, count in sub_entries(expect, key):
                     check(f"computes_of.{node_id}", model.computes.get(node_id), count)
             elif key == "value":
                 if expect.get("error") is not None:
@@ -987,10 +993,10 @@ async def _replay(
                     # value.
                     check("value", await read_id(op["id"]), _ok(want))
             elif key == "read":
-                for node_id, value in want.items():
+                for node_id, value in sub_entries(expect, key):
                     check(f"read.{node_id}", await read_id(node_id), _ok(value))
             elif key == "readable":
-                for node_id, want_alive in want.items():
+                for node_id, want_alive in sub_entries(expect, key):
                     check(f"readable.{node_id}", await alive(node_id), want_alive)
             elif key == "observed_by":
                 check("observed_by", observed, list(want))
@@ -1002,7 +1008,7 @@ async def _replay(
                 wanted = [i for i in want if model.is_effect(stale.get(i))]
                 check("cleanup_order", cleaned, wanted)
             elif key == "scope_owned_count":
-                for scope_name, count in want.items():
+                for scope_name, count in sub_entries(expect, key):
                     check(
                         f"scope_owned_count.{scope_name}",
                         model.scope_owned(scope_name),
@@ -1017,26 +1023,47 @@ async def _replay(
     if tail is None:
         return report
 
-    final = assert_key_with(tail, "final_state") or {} if "final_state" in tail else {}
-    for node_id, degree in (final.get("dependents_of") or {}).items():
-        got = model.dependents_of(node_of(node_id))
-        check(f"final.dependents_of.{node_id}", got, degree)
-        report.observation.degrees[node_id] = got
-    for node_id, want_alive in (final.get("readable") or {}).items():
-        got_alive = await alive(node_id)
-        check(f"final.readable.{node_id}", got_alive, want_alive)
-        report.observation.readable[node_id] = got_alive
-    for node_id, value in (final.get("read") or {}).items():
-        got_read = await read_id(node_id)
-        check(f"final.read.{node_id}", got_read, _ok(value))
-        report.observation.reads[node_id] = got_read[1]
+    # `final_state` and `after_publish` are object-valued, and so is every map
+    # inside them, so the descent runs two levels (#lzsubblockkeyset): a child
+    # tracker owns each object's key set and a node the corpus adds to any of
+    # them fails as unconsumed rather than being compared by nothing.
+    if "final_state" in tail:
+        final = tail.sub("final_state")
+        for node_id, degree in sub_entries(final, "dependents_of"):
+            got = model.dependents_of(node_of(node_id))
+            check(f"final.dependents_of.{node_id}", got, degree)
+            report.observation.degrees[node_id] = got
+        if "readable" in final:
+            for node_id, want_alive in sub_entries(final, "readable"):
+                got_alive = await alive(node_id)
+                check(f"final.readable.{node_id}", got_alive, want_alive)
+                report.observation.readable[node_id] = got_alive
+        if "read" in final:
+            for node_id, value in sub_entries(final, "read"):
+                got_read = await read_id(node_id)
+                check(f"final.read.{node_id}", got_read, _ok(value))
+                report.observation.reads[node_id] = got_read[1]
 
-    publish = (
-        assert_key_with(tail, "after_publish") or {} if "after_publish" in tail else {}
-    )
-    pop = publish.get("op")
-    if pop is not None:
-        assert pop["type"] == "set_cell", f"{name}: after_publish op must be set_cell"
+    if "after_publish" in tail:
+        publish = tail.sub("after_publish")
+        pop = publish.sub("op")
+        assert_key(pop, "type", "set_cell", where=f"{name}: after_publish op")
+        # `id` and `value` are the op's INPUT rather than an expectation: they
+        # say which cell the tail publishes to and what it sets. What they
+        # produce is asserted below by `observed_by`, `read` and
+        # `dependents_of`, so there is nothing to compare them against here.
+        excuse_key(
+            pop,
+            "id",
+            "the published cell's identifier — an input to the op, whose effect "
+            "is asserted by after_publish.observed_by / .read / .dependents_of",
+        )
+        excuse_key(
+            pop,
+            "value",
+            "the value published — an input to the op, whose effect is asserted "
+            "by after_publish.read",
+        )
         before = len(model.runs)
         await model.set_cell(node_of(pop["id"]), pop["value"])
         await model.settle()
@@ -1044,13 +1071,13 @@ async def _replay(
         check(
             "after_publish.observed_by",
             report.observation.after_publish_observed,
-            list(publish.get("observed_by") or []),
+            list(assert_key_with(publish, "observed_by") or []),
         )
-        for node_id, value in (publish.get("read") or {}).items():
+        for node_id, value in sub_entries(publish, "read"):
             got_read = await read_id(node_id)
             check(f"after_publish.read.{node_id}", got_read, _ok(value))
             report.observation.after_publish_reads[node_id] = got_read[1]
-        for node_id, degree in (publish.get("dependents_of") or {}).items():
+        for node_id, degree in sub_entries(publish, "dependents_of"):
             check(
                 f"after_publish.dependents_of.{node_id}",
                 model.dependents_of(node_of(node_id)),

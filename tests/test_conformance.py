@@ -296,19 +296,24 @@ def test_conformance_arena_blob() -> None:
     assert_key(a, "epoch", desc.epoch)
     assert_key(a, "payload_len", desc.len)
 
-    written = {
-        "offset": desc.offset,
-        "len": desc.len,
-        "generation": desc.generation,
-        "epoch": desc.epoch,
-        "checksum": desc.checksum,
-    }
     # The `assertions` copy of the descriptor is the language-agnostic one and the
     # `expected` copy is the byte-level one; both must describe the descriptor the
     # arena actually returned, which also proves the fixture agrees with itself.
-    assert_key(a, "descriptor", written)
+    #
+    # DESCEND rather than compare against a dict built here (#lzsubblockkeyset).
+    # `descriptor` is object-valued, so its sub-keys are a key set of their own
+    # that no block-level rung looks at; `block.sub()` hands back a child tracker
+    # that owns them, and a sub-field the corpus grows fails as unconsumed
+    # instead of being compared by nothing. A hand-built dict on the other side
+    # of an equality is the same five-field list with the failure mode moved.
     expected = fixture["expected"]
-    assert_key(expected, "descriptor", written)
+    for block in (a, expected):
+        descriptor = block.sub("descriptor")
+        assert_key(descriptor, "offset", desc.offset)
+        assert_key(descriptor, "len", desc.len)
+        assert_key(descriptor, "generation", desc.generation)
+        assert_key(descriptor, "epoch", desc.epoch)
+        assert_key(descriptor, "checksum", desc.checksum)
 
     # 40-byte LZSH header byte-identical across rs / py / zig
     buf = arena.buffer()

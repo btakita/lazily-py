@@ -21,7 +21,6 @@ from typing import Any
 from conformance_assert import (
     assert_invalidates,
     assert_key,
-    assert_key_with,
     instrument,
 )
 
@@ -56,8 +55,15 @@ def _assert_invalidation(
     observer(ctx)  # re-materialize for the next step
 
 
-def _want_map(present: dict) -> dict[int, str]:
-    return {int(k): v for k, v in present.items()}
+def _present_map(cell: Any) -> dict[str, str]:
+    """The cell's presence map keyed the way the corpus spells it.
+
+    Normalising the OBSERVED side and comparing whole objects, rather than
+    rebuilding the fixture side inside a predicate: whole-object equality is a
+    key-set check the tracker can see, and a peer the corpus adds then fails
+    here instead of being compared by nothing (#lzsubblockkeyset).
+    """
+    return {str(peer): value for peer, value in cell.present().items()}
 
 
 def _run_presence(fixture: dict) -> None:
@@ -80,10 +86,10 @@ def _run_presence(fixture: dict) -> None:
             raise AssertionError(f"unknown presence op: {op_type}")
 
         expected = step["expected"]
-        assert_key_with(
+        assert_key(
             expected,
             "present",
-            lambda want: cell.present() == _want_map(want),
+            _present_map(cell),
             where=f"step {i} after {op}",
         )
         _assert_invalidation(ctx, observer, expected, "present", i)
@@ -107,10 +113,10 @@ def _run_awareness(fixture: dict) -> None:
             raise AssertionError(f"unknown awareness op: {op_type}")
 
         expected = step["expected"]
-        assert_key_with(
+        assert_key(
             expected,
             "present",
-            lambda want: cell.present() == _want_map(want),
+            _present_map(cell),
             where=f"step {i} after {op}",
         )
         _assert_invalidation(ctx, observer, expected, "present", i)

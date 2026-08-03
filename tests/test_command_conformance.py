@@ -105,16 +105,17 @@ def _run_frames_expect(
                 f"frame {i}: terminal={entry.terminal} want {want_terminal}"
             )
 
-    def _projection(want: dict) -> None:
+    if "projection" in expect:
+        # DESCEND (#lzsubblockkeyset): `projection` is object-valued, so a child
+        # tracker owns `generation` / `commands` and a field the corpus adds
+        # beside them fails as unconsumed instead of being compared by nothing.
+        projection = expect.sub("projection")
         image = proj.to_image()
-        assert image.generation == want["generation"]
-        expected_cmds = want["commands"]
+        assert_key(projection, "generation", image.generation)
+        expected_cmds = assert_key_with(projection, "commands")
         assert len(image.commands) == len(expected_cmds)
         for got, exp in zip(image.commands, expected_cmds, strict=True):
             assert got.to_wire() == exp
-
-    if "projection" in expect:
-        assert_key_with(expect, "projection", _projection)
 
     def _ignored(want: list[int]) -> None:
         # An ignored frame must be REPORTED as non-mutating, not merely left
@@ -243,9 +244,9 @@ def test_cancel_preempts_then_cancel_after_applied_ignored() -> None:
 def test_rpc_call_resolves_only_on_terminal_receipt() -> None:
     fixture = _fixture("rpc_call_waits_for_terminal.json")
     frames = fixture["frames"]
-    expect = assert_key_with(fixture["expect"], "rpc")
+    expect = fixture["expect"].sub("rpc")
     cmd = _first_command_id(frames)
-    assert cmd == expect["command_id"]
+    assert_key(expect, "command_id", cmd)
 
     transport = _Transport()
     client = CommandRpcClient(transport)
@@ -256,14 +257,14 @@ def test_rpc_call_resolves_only_on_terminal_receipt() -> None:
     client.submit(CommandSubmit.from_wire(submit_wire))
     # Ingest subsequent frames (events + receipt) one at a time.
     for i, frame in enumerate(frames[1:], start=1):
-        if i in expect["unresolved_after_frame_indices"]:
+        if i in assert_key_with(expect, "unresolved_after_frame_indices"):
             assert client.poll_call(cmd).kind is CallStateKind.PENDING
         _ingest_frame(client.projection, frame)
-        if i == expect["resolves_after_frame_index"]:
+        if i == assert_key_with(expect, "resolves_after_frame_index"):
             state = client.poll_call(cmd)
             assert state.kind is CallStateKind.RESOLVED
             assert state.entry is not None
-            assert state.entry.status.value == expect["terminal_status"]
+            assert_key(expect, "terminal_status", state.entry.status.value)
 
 
 # ---------------------------------------------------------------------------

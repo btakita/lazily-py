@@ -269,11 +269,9 @@ def test_resync_gap_converge() -> None:
     expect = sc["expect"]
     assert_key(expect, "final_last_epoch", coord.last_epoch)
     assert_key(expect, "resync_requests_emitted", requests)
-    assert_key_with(
-        expect,
-        "converged_nodes",
-        lambda want: state == {k: list(v) for k, v in want.items()},
-    )
+    # Whole-object equality with the OBSERVED side normalised, so the node set
+    # itself is compared and not just the values (#lzsubblockkeyset).
+    assert_key(expect, "converged_nodes", {k: list(v) for k, v in state.items()})
 
     # `equals_no_drop_receiver`: the fixture does not carry the dropped delta's
     # ops, so the no-drop receiver is reconstructed from the covering snapshot —
@@ -318,10 +316,10 @@ def test_idempotent_redelivery() -> None:
         # At-least-once delivery, exactly-once effect: the re-delivered frame
         # carries ops that WOULD change the image, so an image compare is the
         # only thing that separates "ignored" from "applied twice, same result".
-        assert_key_with(
+        assert_key(
             expect,
             "state_after",
-            lambda want, state=state: state == {k: list(v) for k, v in want.items()},
+            {k: list(v) for k, v in state.items()},
             where=name,
         )
         assert_key(expect, "net_effect_unchanged", state == before, where=name)

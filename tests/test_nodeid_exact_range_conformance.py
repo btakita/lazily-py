@@ -27,6 +27,7 @@ from pathlib import Path
 from conformance_assert import (
     TrackedBlock,
     assert_key,
+    assert_key_set,
     assert_key_with,
     excuse_key,
     instrument,
@@ -183,11 +184,15 @@ def test_nodeid_exact_range_conformance() -> None:
     assert_key(block, "codecs", sorted(observed_codecs))
     # `outcomes` is a vocabulary mapped to English glosses, not a prose key: the
     # assertion is its KEY SET, checked against the outcomes really replayed.
-    assert_key_with(
+    # Through the tracker's own key-set entry point (#lzsubblockkeyset) rather
+    # than a predicate — the predicate form is indistinguishable at the tracker
+    # from one that checks two named sub-fields and stops, which is how a planted
+    # third outcome stayed green in the bindings that fixed this per call site.
+    assert_key_set(
         block,
         "outcomes",
-        lambda want: sorted(want) == sorted(observed_outcomes),
-        where=f"replayed outcomes {sorted(observed_outcomes)}",
+        observed_outcomes,
+        where="the outcome branches this run really dispatched on",
     )
 
     verify_prose(fixture)

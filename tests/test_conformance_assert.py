@@ -28,6 +28,7 @@ from conformance_assert import (
     KNOWN_UNBOUND_BLOCKS,
     TrackedBlock,
     assert_key,
+    assert_key_set,
     assert_key_with,
     block_bind_failures,
     consumption_failures,
@@ -44,6 +45,7 @@ from conformance_assert import (
     scenario_failures,
     scenario_id,
     scenarios,
+    sub_entries,
     tracked,
     verify_prose,
 )
@@ -171,6 +173,113 @@ def test_assert_key_with_hands_the_fixture_value_to_the_predicate() -> None:
     with pytest.raises(AssertionError, match="predicate rejected"):
         assert_key_with(other, "len", lambda want: want == 4)
     assert not _report("selftest/with2.json")
+
+
+# ---------------------------------------------------------------------------
+# Object-valued assertion keys (#lzsubblockkeyset)
+# ---------------------------------------------------------------------------
+
+
+def test_an_object_key_checked_field_by_field_is_reported() -> None:
+    """The defect: named sub-fields checked, and the next one compared by nothing."""
+    fixture = "selftest/objectkey.json"
+    block = tracked({"descriptor": {"offset": 0, "len": 31}}, fixture=fixture)
+    assert_key_with(block, "descriptor", lambda want: want["offset"] == 0)
+
+    reported = _report(fixture)
+    assert reported, "an object checked by a predicate produced no report line"
+    assert "object-valued key(s) ['descriptor']" in reported[0]
+    assert "without a key-set check" in reported[0]
+
+    reset(fixture=fixture)
+
+
+def test_sub_descends_and_the_child_owns_its_keys() -> None:
+    fixture = "selftest/objectsub.json"
+    block = tracked({"descriptor": {"offset": 0, "len": 31}}, fixture=fixture)
+    child = block.sub("descriptor")
+    assert_key(child, "offset", 0)
+    assert_key(child, "len", 31)
+    assert not _report(fixture)
+
+    reset(fixture=fixture)
+
+
+def test_a_sub_key_the_child_never_reads_is_reported() -> None:
+    """A sub-field the corpus grows fails exactly like a top-level key."""
+    fixture = "selftest/objectgrow.json"
+    block = tracked(
+        {"descriptor": {"offset": 0, "len": 31, "planted": 1}}, fixture=fixture
+    )
+    child = block.sub("descriptor")
+    assert_key(child, "offset", 0)
+    assert_key(child, "len", 31)
+
+    reported = _report(fixture)
+    assert reported, "an unread sub-key produced no report line"
+    assert "[assertions.descriptor]" in reported[0]
+    assert "'planted'" in reported[0]
+    assert "never consumed" in reported[0]
+
+    reset(fixture=fixture)
+
+
+def test_assert_key_set_compares_the_key_set_in_both_directions() -> None:
+    fixture = "selftest/objectvocab.json"
+    block = tracked({"outcomes": {"exact": "...", "reject": "..."}}, fixture=fixture)
+    assert_key_set(block, "outcomes", {"exact", "reject"})
+    assert not _report(fixture)
+    reset(fixture=fixture)
+
+    block = tracked({"outcomes": {"exact": "...", "reject": "..."}}, fixture=fixture)
+    with pytest.raises(AssertionError, match=r"never produced: \['reject'\]"):
+        assert_key_set(block, "outcomes", {"exact"})
+    reset(fixture=fixture)
+
+    block = tracked({"outcomes": {"exact": "..."}}, fixture=fixture)
+    with pytest.raises(AssertionError, match=r"not declared: \['reject'\]"):
+        assert_key_set(block, "outcomes", {"exact", "reject"})
+    reset(fixture=fixture)
+
+
+def test_assert_key_set_refuses_a_scalar_key() -> None:
+    fixture = "selftest/objectscalar.json"
+    block = tracked({"epoch": 9}, fixture=fixture)
+    with pytest.raises(AssertionError, match="OBJECT-valued"):
+        assert_key_set(block, "epoch", ())
+    reset(fixture=fixture)
+
+
+def test_sub_entries_books_every_entry_read_and_asserted() -> None:
+    fixture = "selftest/objectentries.json"
+    block = tracked({"dependents_of": {"a": 1, "b": 2}}, fixture=fixture)
+    seen = dict(sub_entries(block, "dependents_of"))
+    assert seen == {"a": 1, "b": 2}
+    assert not _report(fixture)
+
+    reset(fixture=fixture)
+
+
+def test_whole_value_equality_discharges_the_key_set() -> None:
+    """Equality is a real key-set check; only the predicate form is blind."""
+    fixture = "selftest/objecteq.json"
+    block = tracked({"receipts": {"accepted": 1, "dropped": 0}}, fixture=fixture)
+    assert_key(block, "receipts", {"accepted": 1, "dropped": 0})
+    assert not _report(fixture)
+
+    reset(fixture=fixture)
+
+
+def test_an_excused_object_key_is_satisfied() -> None:
+    """The escape valve stays open, and still demands a written reason."""
+    fixture = "selftest/objectexcused.json"
+    block = tracked(
+        {"probe": {"only": "one projection is observable"}}, fixture=fixture
+    )
+    excuse_key(block, "probe", "this runner can observe only one projection of it")
+    assert not _report(fixture)
+
+    reset(fixture=fixture)
 
 
 # ---------------------------------------------------------------------------

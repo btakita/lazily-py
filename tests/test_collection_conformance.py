@@ -13,7 +13,13 @@ import json
 from pathlib import Path
 from typing import Any
 
-from conformance_assert import assert_key, assert_key_with, instrument, scenarios
+from conformance_assert import (
+    assert_key,
+    assert_key_with,
+    instrument,
+    scenarios,
+    sub_entries,
+)
 
 from lazily import (
     CrdtOp,
@@ -349,24 +355,26 @@ def test_textcrdt_delta_sync_conformance() -> None:
                 ),
                 where=name,
             )
+        # DESCEND into the per-replica maps (#lzsubblockkeyset): each is an
+        # object whose key set is the set of replicas the claim covers, and a
+        # replica the corpus adds must fail rather than drop out of a
+        # comprehension driven by the fixture's own names.
         if "text_on" in exp:
-            assert_key_with(
-                exp,
-                "text_on",
-                lambda want, interp=interp: {who: interp.r[who].text() for who in want}
-                == want,
-                where=f"{name}: text_on",
-            )
+            for who, want_text in sub_entries(exp, "text_on", where=f"{name}: text_on"):
+                assert interp.r[who].text() == want_text, f"{name}: text on {who}"
         if "version_vector_on" in exp:
-            assert_key_with(
-                exp,
-                "version_vector_on",
-                lambda want, interp=interp: all(
-                    interp.r[who].version_vector() == {int(k): v for k, v in vv.items()}
-                    for who, vv in want.items()
-                ),
-                where=f"{name}: version_vector_on",
-            )
+            vectors = exp.sub("version_vector_on")
+            for who in sorted(vectors):
+                got = interp.r[who].version_vector()
+                # Whole-object equality per replica, with the OBSERVED side keyed
+                # the way the corpus spells it, so the vector's own peer set is
+                # compared too.
+                assert_key(
+                    vectors,
+                    who,
+                    {str(peer): count for peer, count in got.items()},
+                    where=f"{name}: version_vector_on[{who}]",
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -459,31 +467,29 @@ def test_seqcrdt_convergence_conformance() -> None:
                 where=f"{name}: len over {len_targets}",
             )
         if "get" in exp:
-            assert_key_with(
+            # The observed side is built by probing EVERY key the fixture names,
+            # so whole-object equality compares the object's key set as well as
+            # its values (#lzsubblockkeyset).
+            assert_key(
                 exp,
                 "get",
-                lambda want, interp=interp: {k: interp.r["a"].get(k) for k in want}
-                == want,
+                {k: interp.r["a"].get(k) for k in exp["get"]},
                 where=name,
             )
         if "order_on" in exp:
-            assert_key_with(
-                exp,
-                "order_on",
-                lambda want, interp=interp: {who: interp.r[who].order() for who in want}
-                == want,
-                where=f"{name}: order_on",
-            )
+            for who, want_order in sub_entries(
+                exp, "order_on", where=f"{name}: order_on"
+            ):
+                assert interp.r[who].order() == want_order, f"{name}: order on {who}"
         if "get_on" in exp:
-            assert_key_with(
-                exp,
-                "get_on",
-                lambda want, interp=interp: all(
-                    {k: interp.r[who].get(k) for k in gets} == gets
-                    for who, gets in want.items()
-                ),
-                where=f"{name}: get_on",
-            )
+            per_replica = exp.sub("get_on")
+            for who in sorted(per_replica):
+                assert_key(
+                    per_replica,
+                    who,
+                    {k: interp.r[who].get(k) for k in per_replica[who]},
+                    where=f"{name}: get_on[{who}]",
+                )
         if "orders_equal" in exp:
             assert_key_with(
                 exp,
@@ -495,16 +501,13 @@ def test_seqcrdt_convergence_conformance() -> None:
                 where=name,
             )
         if "not_contains_on" in exp:
-            assert_key_with(
-                exp,
-                "not_contains_on",
-                lambda want, interp=interp: all(
-                    item not in interp.r[who]
-                    for who, items in want.items()
-                    for item in items
-                ),
-                where=f"{name}: not_contains_on",
-            )
+            for who, items in sub_entries(
+                exp, "not_contains_on", where=f"{name}: not_contains_on"
+            ):
+                for item in items:
+                    assert item not in interp.r[who], (
+                        f"{name}: {item!r} must be absent from {who}"
+                    )
         if "contains_all" in exp:
             assert_key_with(
                 exp,

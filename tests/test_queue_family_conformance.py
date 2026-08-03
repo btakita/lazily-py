@@ -17,7 +17,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from conformance_assert import assert_key, assert_key_with, instrument
+from conformance_assert import (
+    assert_key,
+    assert_key_set,
+    instrument,
+    sub_entries,
+)
 
 import lazily
 
@@ -126,13 +131,18 @@ def _assert_invalidation(
     where: str,
     readers: dict[str, _Counter],
     baseline: dict[str, int],
-    invalidates: dict[str, bool],
+    expected: Any,
 ) -> None:
+    # DESCEND into the matrix (#lzsubblockkeyset) rather than taking its value
+    # and walking it here: the child tracker owns the matrix's own key set, so a
+    # reader the corpus adds to it fails as unconsumed instead of being compared
+    # by nothing. Every entry is booked read AND asserted on the way through.
+    invalidates = dict(sub_entries(expected, "invalidates", where=where))
     # An explicit empty object is the canonical "no reader invalidates"
     # matrix.  Assert every already-minted reader in that case so `{}` is not
     # treated as "skip invalidation checks".
-    expected = invalidates or dict.fromkeys(readers, False)
-    for name, should_invalidate in expected.items():
+    wanted = invalidates or dict.fromkeys(readers, False)
+    for name, should_invalidate in wanted.items():
         assert name in readers, f"{where}: fixture names unknown reader {name!r}"
         after = readers[name].drive()
         delta = after - baseline[name]
@@ -206,8 +216,7 @@ def _run_queue(flavor: type[_Flavor], fixture_name: str) -> tuple[int, int]:
         expected = step.get("expected")
         assert expected is not None, f"{where}: expected block is missing"
         assert "invalidates" in expected, f"{where}: invalidation matrix is missing"
-        # The matrix reaches its comparison inside `_assert_invalidation`.
-        invalidates = assert_key_with(expected, "invalidates", where=where)
+        # The matrix is descended into and compared inside `_assert_invalidation`.
         matrices += 1
 
         baseline = {name: reader.drive() for name, reader in readers.items()}
@@ -242,7 +251,7 @@ def _run_queue(flavor: type[_Flavor], fixture_name: str) -> tuple[int, int]:
             assert result == step["returns"], (
                 f"{where}: returns {result!r}, expected {step['returns']!r}"
             )
-        _assert_invalidation(where, readers, baseline, invalidates)
+        _assert_invalidation(where, readers, baseline, expected)
         _assert_queue_state(where, queue, expected)
 
     return len(steps), matrices
@@ -294,31 +303,28 @@ def _assert_topic_state(where: str, topic: Any, expected: dict[str, Any]) -> Non
     assert_key(expected, "base_offset", topic.base_offset, where=where)
     assert_key(expected, "elements", topic.elements(), where=where)
 
-    def _subscriptions(wanted: dict[str, Any]) -> None:
+    if "subscriptions" in expected:
+        # The KEY SET first (#lzsubblockkeyset): the subscriber ids the fixture
+        # names must be exactly the ones the topic really holds, in both
+        # directions. Then descend per subscriber, because each entry is an
+        # object of its own and reading `cursor`/`durability`/`connected` by
+        # name would leave a fourth field compared by nothing.
         actual_ids = {saved.subscriber_id for saved in topic.snapshot().subscriptions}
-        assert actual_ids == set(wanted), f"{where}: subscriber ids"
-        for subscriber_id, want in wanted.items():
+        assert_key_set(expected, "subscriptions", actual_ids, where=where)
+        subscriptions = expected.sub("subscriptions")
+        for subscriber_id in sorted(subscriptions):
+            want = subscriptions.sub(subscriber_id)
             actual = topic.subscription(subscriber_id)
             assert actual is not None, f"{where}: missing subscriber {subscriber_id!r}"
-            assert actual.cursor == want["cursor"], f"{where}: subscriber cursor"
-            assert actual.durability.value == want["durability"], (
-                f"{where}: subscriber durability"
-            )
-            assert actual.connected is want["connected"], (
-                f"{where}: subscriber connected flag"
-            )
+            assert_key(want, "cursor", actual.cursor, where=where)
+            assert_key(want, "durability", actual.durability.value, where=where)
+            assert_key(want, "connected", actual.connected, where=where)
 
-    if "subscriptions" in expected:
-        assert_key_with(expected, "subscriptions", _subscriptions, where=where)
-
-    def _reads(wanted: dict[str, Any]) -> None:
-        for subscriber_id, want in wanted.items():
+    if "reads" in expected:
+        for subscriber_id, want in sub_entries(expected, "reads", where=where):
             assert topic.read_stream(subscriber_id) == want, (
                 f"{where}: subscriber {subscriber_id!r} read mismatch"
             )
-
-    if "reads" in expected:
-        assert_key_with(expected, "reads", _reads, where=where)
 
 
 def _run_topic(flavor: type[_Flavor], fixture_name: str) -> tuple[int, int]:
@@ -340,8 +346,7 @@ def _run_topic(flavor: type[_Flavor], fixture_name: str) -> tuple[int, int]:
         expected = step.get("expected")
         assert expected is not None, f"{where}: expected block is missing"
         assert "invalidates" in expected, f"{where}: invalidation matrix is missing"
-        # The matrix reaches its comparison inside `_assert_invalidation`.
-        invalidates = assert_key_with(expected, "invalidates", where=where)
+        # The matrix is descended into and compared inside `_assert_invalidation`.
         matrices += 1
 
         baseline = {name: reader.drive() for name, reader in readers.items()}
@@ -372,7 +377,7 @@ def _run_topic(flavor: type[_Flavor], fixture_name: str) -> tuple[int, int]:
             assert result == step["returns"], (
                 f"{where}: returns {result!r}, expected {step['returns']!r}"
             )
-        _assert_invalidation(where, readers, baseline, invalidates)
+        _assert_invalidation(where, readers, baseline, expected)
         _assert_topic_state(where, topic, expected)
 
     return len(steps), matrices
@@ -465,8 +470,7 @@ def _run_work_queue(flavor: type[_Flavor], fixture_name: str) -> tuple[int, int]
         expected = step.get("expected")
         assert expected is not None, f"{where}: expected block is missing"
         assert "invalidates" in expected, f"{where}: invalidation matrix is missing"
-        # The matrix reaches its comparison inside `_assert_invalidation`.
-        invalidates = assert_key_with(expected, "invalidates", where=where)
+        # The matrix is descended into and compared inside `_assert_invalidation`.
         matrices += 1
 
         baseline = {name: reader.drive() for name, reader in readers.items()}
@@ -489,7 +493,7 @@ def _run_work_queue(flavor: type[_Flavor], fixture_name: str) -> tuple[int, int]
             f"{where}: returns {_work_return(result)!r}, "
             f"expected {step.get('returns')!r}"
         )
-        _assert_invalidation(where, readers, baseline, invalidates)
+        _assert_invalidation(where, readers, baseline, expected)
         _assert_work_state(where, queue, expected)
 
     return len(steps), matrices

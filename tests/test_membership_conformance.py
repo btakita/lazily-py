@@ -18,7 +18,12 @@ import json
 from pathlib import Path
 from typing import Any
 
-from conformance_assert import assert_key, assert_key_with, instrument
+from conformance_assert import (
+    assert_key,
+    assert_key_with,
+    instrument,
+    sub_entries,
+)
 
 from lazily import Slot
 from lazily.membership import (
@@ -77,15 +82,15 @@ def _run_fixture(fixture: dict) -> None:
 
         expected = step["expected"]
 
-        # Per-peer state.
-        def _states(want: dict, m: MembershipCell = m) -> bool:
-            got = {}
-            for peer in want:
-                state = m.state(_coerce_peer(peer))
-                got[peer] = state.value if state is not None else None
-            return got == want
-
-        assert_key_with(expected, "states", _states, where=f"step {i}")
+        # Per-peer state. DESCEND (#lzsubblockkeyset): a child tracker owns the
+        # map's key set, so a peer the corpus adds fails as unconsumed rather
+        # than being compared by nothing.
+        for peer, want_state in sub_entries(expected, "states", where=f"step {i}"):
+            state = m.state(_coerce_peer(peer))
+            got = state.value if state is not None else None
+            assert got == want_state, (
+                f"step {i}: peer {peer!r} state is {got!r}, expected {want_state!r}"
+            )
 
         # Alive set.
         assert_key_with(

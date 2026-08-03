@@ -141,6 +141,45 @@ is NOT satisfied by the blanket, even when it is spelled ``note``. See
 into, and it silently voids the convention for both ``frame_roundtrip``
 fixtures.
 
+Object-valued keys are checked by their KEY SET (#lzsubblockkeyset)
+-------------------------------------------------------------------
+Every rung above reasons about the keys of a *block*. An assertion key whose
+VALUE is a JSON object has a key set of its own, one level down, and nothing
+above looks at it: a runner that checks five named sub-fields of
+``arena_blob.json``'s ``assertions.descriptor`` stays green when the corpus
+grows a sixth, because the sixth is compared by nothing. That is the null form
+of ``#lznullformblind`` again — this time *inside* an assertion key rather than
+beside one. The zig corpus-perturbation pass found it by planting a key there
+and watching every scalar sibling redden while the object stayed silent.
+
+The cheap fix is a field count written at each call site, and it is the wrong
+one: it relies on every site remembering, which is the property that failed. So
+the obligation lives in the TRACKER, which already holds a block's key set, and
+there are exactly two ways to discharge it:
+
+1. :meth:`TrackedBlock.sub` — DESCEND. Hands back a child tracker bound to the
+   object, which owns the unconsumed/unasserted verdicts for every key beneath
+   it. A sub-key nobody reads fails exactly the way an unread top-level key
+   does.
+2. :func:`assert_key_set` — compare the object's KEY SET against the set the run
+   really produced, in BOTH directions. A fixture token nothing replayed and a
+   replayed token the fixture omits are both failures. This is the form for a
+   VOCABULARY, where the values are English glosses and only the names are the
+   assertion (``codec/nodeid_exact_range.json``'s ``assertions.outcomes``).
+
+:func:`assert_invalidates` is a third, narrower form of (2) held inside the
+tracker for the same reason, and marks its key checked itself.
+
+The guard that makes this not-optional lands in :func:`consumption_failures`: an
+assertion key whose fixture value is a JSON object, consumed and not run through
+one of those, FAILS as "object-valued key consumed without a key-set check".
+Plain :func:`assert_key` / :func:`assert_key_with` deliberately do NOT satisfy
+it — a predicate reading five named sub-fields is precisely the per-call-site
+field list this rung removes, and equality against a dict the call site builds
+by hand is the same list spelled as a literal. :func:`excuse_key` and the prose
+channels stay available for an object that genuinely carries no obligation, and
+they already require a recorded reason.
+
 Scenario was never replayed (#lzscenariocoverage)
 -------------------------------------------------
 The rungs above all reason about the scenarios a runner *reached*. A fixture that
@@ -195,6 +234,7 @@ __all__ = [
     "TrackedBlock",
     "assert_invalidates",
     "assert_key",
+    "assert_key_set",
     "assert_key_with",
     "block_bind_failures",
     "consumption_failures",
@@ -216,6 +256,7 @@ __all__ = [
     "scenario_id",
     "scenario_view",
     "scenarios",
+    "sub_entries",
     "tracked",
     "verify_prose",
 ]
@@ -410,6 +451,8 @@ class _Ledger:
         "excused",
         "fixture",
         "keys",
+        "keyset_checked",
+        "object_keys",
         "prose",
         "seen",
     )
@@ -421,6 +464,14 @@ class _Ledger:
         self.seen: set[str] = set()
         self.asserted: set[str] = set()
         self.excused: dict[str, str] = {}
+        #: Keys whose fixture value is a JSON OBJECT (#lzsubblockkeyset). Those
+        #: carry a key set one level down that no rung above this one looks at.
+        self.object_keys: set[str] = set()
+        #: Object-valued keys whose sub-key SET reached a comparison WHOLESALE —
+        #: via ``TrackedBlock.sub``, :func:`assert_key_set`, whole-value or
+        #: whole-block equality, or :func:`assert_invalidates`. Those need no
+        #: per-sub-key accounting: the whole object reached the comparison.
+        self.keyset_checked: set[str] = set()
         self.prose: set[str] = set()
         #: Keys this block's own ``prose`` array declares as obligations.
         self.declared_prose: set[str] = set()
@@ -473,6 +524,23 @@ class _Ledger:
         """Excuses for keys the same session also asserts — hiding nothing."""
         return sorted(set(self.excused) & self.asserted)
 
+    def object_without_keyset(self) -> list[str]:
+        """Object-valued keys consumed with no check of their own key set.
+
+        Scoped to keys some runner CONSUMED: an object nobody read is already
+        the unconsumed verdict, and naming it twice under a weaker rung says
+        nothing new. The excuse and prose channels satisfy it because they
+        already record a reason for the whole key — the obligation this rung
+        adds falls on the sites that CLAIM to check the object.
+        """
+        satisfied = (
+            self.keyset_checked
+            | set(self.excused)
+            | self.blanket_exempt()
+            | self.discharged_ever
+        )
+        return sorted((self.object_keys & self.seen) - satisfied)
+
 
 _LEDGERS: dict[tuple[str, str], _Ledger] = {}
 
@@ -504,6 +572,14 @@ class TrackedBlock(Mapping[str, Any]):
         record_block_bind(self._data)
         ledger = _LEDGERS.setdefault((fixture, block), _Ledger(fixture, block))
         ledger.keys.update(self._data)
+        # #lzsubblockkeyset: an object-valued key owns a key set one level down,
+        # and every rung above stops at this block's own keys. Recording which
+        # keys those are here — from the fixture's value, never from what a call
+        # site claims — is what lets the finish-time guard name a site that
+        # checked the object field by field.
+        ledger.object_keys.update(
+            key for key, value in self._data.items() if isinstance(value, Mapping)
+        )
         # Prose keys count as consumed AND as satisfied: the declaration at the
         # call site IS the act of looking at them, and there is nothing to check.
         ledger.prose.update(prose)
@@ -569,6 +645,12 @@ class TrackedBlock(Mapping[str, Any]):
         self._refuse_asserting_prose(sorted(self._data), "whole-block equality")
         self._ledger.seen.update(self._data)
         self._ledger.asserted.update(self._data)
+        # Whole-block equality descends: an object-valued key's own key set
+        # reaches the comparison too, and an added sub-field fails it
+        # (#lzsubblockkeyset). This is the one implicit discharge.
+        self._ledger.keyset_checked.update(
+            key for key, value in self._data.items() if isinstance(value, Mapping)
+        )
         _RUN_ASSERTED.setdefault(self.fixture, set()).update(self._data)
         if isinstance(other, TrackedBlock):
             return self._data == other._data
@@ -637,6 +719,111 @@ class TrackedBlock(Mapping[str, Any]):
         self._ledger.seen.add(key)
         self._ledger.excused[key] = reason.strip()
 
+    # -- Object-valued keys (#lzsubblockkeyset) -----------------------------
+
+    def _object_value(self, key: str, how: str) -> Mapping[str, Any]:
+        if key not in self._data:
+            raise AssertionError(
+                f"{self.fixture} [{self.block}]: {how}({key!r}) names a key the "
+                f"fixture does not carry; the call has rotted"
+            )
+        value = self._data[key]
+        if not isinstance(value, Mapping):
+            raise AssertionError(
+                f"{self.fixture} [{self.block}]: {how}({key!r}) is for an "
+                f"OBJECT-valued key, and this one holds {type(value).__name__}. "
+                f"Use assert_key/assert_key_with (#lzsubblockkeyset)"
+            )
+        return value
+
+    def mark_keyset_checked(self, key: str) -> None:
+        """Record that ``key``'s own sub-key SET reached a comparison."""
+        self._ledger.keyset_checked.add(key)
+
+    def sub(self, key: str, *, prose: tuple[str, ...] = ()) -> TrackedBlock:
+        """Descend into an object-valued key, returning a CHILD tracker (entry 1).
+
+        The child owns the unconsumed/unasserted/excuse verdicts for every key
+        beneath it, under the block label ``"<this block>.<key>"``, so a
+        sub-field the corpus grows and this runner ignores fails exactly the way
+        an ignored top-level key does — no field count at the call site, and
+        nothing for a call site to forget.
+
+        The parent key is booked read, asserted and key-set-checked: the child's
+        own ledger is what carries the obligation from here on, and leaving the
+        parent unasserted would report a gap the child already covers.
+        """
+        want = self._object_value(key, "sub")
+        self._refuse_asserting_prose((key,), f"sub({key!r})")
+        self._ledger.seen.add(key)
+        self._ledger.asserted.add(key)
+        self._ledger.keyset_checked.add(key)
+        _RUN_ASSERTED.setdefault(self.fixture, set()).add(key)
+        return TrackedBlock(
+            want, fixture=self.fixture, block=f"{self.block}.{key}", prose=prose
+        )
+
+
+def sub_entries(
+    block: TrackedBlock,
+    key: str,
+    where: str = "",
+) -> Iterator[tuple[str, Any]]:
+    """Descend into an object-valued key and yield ``(sub-key, value)`` for ALL of it.
+
+    The idiom entry point for the corpus's dominant object shape — a map from a
+    name the run can probe (a node id, a scope key, a peer) to the value expected
+    of it. ``for node, want in sub_entries(expect, "dependents_of"):`` replaces
+    ``for node, want in expect["dependents_of"].items():`` and is the whole
+    change a call site needs: the descent books the parent key-set-checked, and
+    each entry is booked read AND asserted against the child tracker, so a
+    sub-key the corpus grows and this loop never reaches fails as unconsumed.
+
+    Iteration order is sorted, so a fixture's entries are replayed the same way
+    on every run. Breaking out of the loop early is not silent: the sub-keys the
+    loop never reached stay unasserted and the child ledger reports them.
+    """
+    child = block.sub(key)
+    for name in sorted(child):
+        yield name, assert_key_with(child, name, where=where or f"{key}.{name}")
+
+
+def assert_key_set(
+    block: TrackedBlock,
+    key: str,
+    actual: Iterable[str],
+    where: str = "",
+) -> Mapping[str, Any]:
+    """Assert an object-valued key's KEY SET equals ``actual`` (entry 2).
+
+    For a VOCABULARY — an object whose names are the assertion and whose values
+    are English glosses, so descending into it would only ask a runner to
+    compare paragraphs. ``codec/nodeid_exact_range.json``'s ``assertions.outcomes``
+    is the corpus instance: the claim is "these are the outcomes a decoder may
+    produce", and the check is that the run really dispatched on each of them.
+
+    BOTH directions, like every other ledger in this module. A name the fixture
+    carries and the run never produced is an unreplayed branch; a name the run
+    produced and the fixture omits means the vocabulary has drifted. Reporting
+    only the first would let the fixture shrink silently.
+    """
+    want = block._object_value(key, "assert_key_set")
+    block.mark_asserted(key)  # marks read; refuses a declared prose key
+    block.mark_keyset_checked(key)
+    produced = set(actual)
+    declared = set(want)
+    missing = sorted(declared - produced)
+    extra = sorted(produced - declared)
+    site = f" ({where})" if where else ""
+    assert not missing and not extra, (
+        f"{block.fixture} [{block.block}] {key}{site}: key set mismatch — "
+        f"the fixture declares {sorted(declared)} and this run produced "
+        f"{sorted(produced)}"
+        + (f"; never produced: {missing}" if missing else "")
+        + (f"; not declared: {extra}" if extra else "")
+    )
+    return want
+
 
 def assert_key(
     block: TrackedBlock,
@@ -652,6 +839,13 @@ def assert_key(
     to reach the comparison for the key to count.
     """
     want = block.mark_asserted(key)
+    if isinstance(want, Mapping) and isinstance(actual, Mapping):
+        # Whole-object equality IS a key-set check (#lzsubblockkeyset): the
+        # fixture's entire object reaches `==`, so a sub-field the corpus grows
+        # fails right here. Only the PREDICATE form — five named sub-fields and
+        # stop — leaves the addition compared by nothing, which is why
+        # assert_key_with makes no such claim.
+        block.mark_keyset_checked(key)
     site = f" ({where})" if where else ""
     assert actual == want, (
         f"{block.fixture} [{block.block}] {key}{site}: expected {want!r}, got {actual!r}"
@@ -705,6 +899,13 @@ def assert_invalidates(
     if key not in block:
         return
     want = block.mark_asserted(key) if isinstance(block, TrackedBlock) else block[key]
+    if isinstance(block, TrackedBlock):
+        # The narrow third form of the key-set check (#lzsubblockkeyset): every
+        # reader NAMED by the fixture has to appear in `observed` below, so a
+        # reader the corpus adds cannot be compared by nothing. Deliberately
+        # one-directional — a runner may legitimately watch readers this step
+        # does not name, unlike a vocabulary, where an undeclared name is drift.
+        block.mark_keyset_checked(key)
     site = f" ({where})" if where else ""
     unwatched = sorted(set(want) - set(observed))
     assert not unwatched, (
@@ -1060,7 +1261,8 @@ def consumption_failures() -> list[str]:
 
     1. never read — ``#lzassertunknownkeys``, the original rung;
     2. read but never asserted — ``#lzconsumednotasserted``;
-    3. a stale excuse: excused *and* asserted in the same session.
+    3. a stale excuse: excused *and* asserted in the same session;
+    4. an object-valued key checked field by field — ``#lzsubblockkeyset``.
     """
     lines: list[str] = []
     for (fixture, block), ledger in sorted(_LEDGERS.items()):
@@ -1085,6 +1287,15 @@ def consumption_failures() -> list[str]:
                 + ("that key" if len(stale) == 1 else "those keys")
                 + "; reason(s): "
                 + "; ".join(ledger.excused[key] for key in stale)
+            )
+        blind = ledger.object_without_keyset()
+        if blind:
+            lines.append(
+                f"{fixture} [{block}]: object-valued key(s) {blind} were consumed "
+                f"without a key-set check — a sub-field the corpus adds would be "
+                f"compared by NOTHING. Descend with block.sub(key) so the child "
+                f"tracker owns those keys, or compare the key set with "
+                f"assert_key_set(block, key, produced) (#lzsubblockkeyset)"
             )
     return lines
 

@@ -18,7 +18,13 @@ import json
 from pathlib import Path
 
 import pytest
-from conformance_assert import assert_key, assert_key_with, instrument, scenarios
+from conformance_assert import (
+    assert_key,
+    assert_key_with,
+    instrument,
+    scenarios,
+    sub_entries,
+)
 
 from lazily.lossless_tree_crdt import (
     LEAF_KIND_FROM_WIRE,
@@ -138,12 +144,15 @@ def _assert_expect(world: _World, expect: dict, label: str) -> None:
             where=f"{label}: render on a",
         )
     if "render_on" in expect:
-        assert_key_with(
-            expect,
-            "render_on",
-            lambda want: {name: world.replicas[name].render() for name in want} == want,
-            where=f"{label}: render_on",
-        )
+        # DESCEND (#lzsubblockkeyset): a child tracker owns the per-replica map,
+        # so a replica the corpus adds fails as unconsumed instead of dropping
+        # out of a dict comprehension keyed by the fixture's own names.
+        for replica, want_render in sub_entries(
+            expect, "render_on", where=f"{label}: render_on"
+        ):
+            assert world.replicas[replica].render() == want_render, (
+                f"{label}: render on {replica}"
+            )
     if "live_nodes" in expect:
         assert_key(
             expect,

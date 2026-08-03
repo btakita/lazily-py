@@ -16,7 +16,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from conformance_assert import assert_key, assert_key_with, instrument, scenarios
+from conformance_assert import (
+    assert_key,
+    assert_key_with,
+    instrument,
+    scenarios,
+    sub_entries,
+)
 
 from lazily import CrdtPlaneRuntime, CrdtSync
 
@@ -86,15 +92,15 @@ def test_family_sync_materialize_on_ingest() -> None:
             where=f"[{name}] present count",
         )
 
-        assert_key_with(
-            expect,
-            "target_values",
-            lambda want, target=target: {
-                key: target.family_value_lww(namespace, key) for key in want
-            }
-            == want,
-            where=f"[{name}] materialized values",
-        )
+        # DESCEND (#lzsubblockkeyset): a child tracker owns the materialized-value
+        # map, so a key the corpus adds fails as unconsumed rather than dropping
+        # out of a comprehension driven by the fixture's own key list.
+        for key, want_value in sub_entries(
+            expect, "target_values", where=f"[{name}] materialized values"
+        ):
+            assert target.family_value_lww(namespace, key) == want_value, (
+                f"[{name}] materialized value for {key!r}"
+            )
 
         count_true = sum(
             1

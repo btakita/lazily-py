@@ -19,7 +19,12 @@ import json
 from pathlib import Path
 
 import pytest
-from conformance_assert import assert_key_with, excuse_key, instrument
+from conformance_assert import (
+    assert_key_with,
+    excuse_key,
+    instrument,
+    sub_entries,
+)
 
 from lazily import ComputedMap, DisposedError, EntryKind, SourceMap
 
@@ -252,13 +257,12 @@ def _check_val_fixture(name: str) -> dict:
     # lazy defers every derived slot: nothing present at build.
     assert lazy.present_count() == 0
 
-    # observe_canonical / eager_lazy_observationally_equivalent
-    def _observe(want: dict[str, int]) -> None:
-        for k, value in want.items():
-            assert eager.get(k) == value
-            assert lazy.get_or_insert_with(k, lookup) == value
-
-    assert_key_with(expected, "observe", _observe)
+    # observe_canonical / eager_lazy_observationally_equivalent. DESCEND
+    # (#lzsubblockkeyset): the child tracker owns the map's key set, so a key
+    # the corpus adds fails as unconsumed rather than being compared by nothing.
+    for k, value in sub_entries(expected, "observe"):
+        assert eager.get(k) == value
+        assert lazy.get_or_insert_with(k, lookup) == value
 
     return fixture
 
@@ -354,16 +358,13 @@ def test_conformance_entry_kind_orthogonal_to_mode() -> None:
     )
 
     # Observational transparency across kinds.
-    def _observe(want: dict[str, int]) -> None:
-        for k, value in want.items():
-            if k in cell_keys:
-                assert eager_cells.get(k) == value
-                assert lazy_cells.get(k) == value
-            else:
-                assert eager_slots.get(k) == value
-                assert lazy_slots.get_or_insert_with(k, _ctx_factory(lookup)) == value
-
-    assert_key_with(expected, "observe", _observe)
+    for k, value in sub_entries(expected, "observe"):
+        if k in cell_keys:
+            assert eager_cells.get(k) == value
+            assert lazy_cells.get(k) == value
+        else:
+            assert eager_slots.get(k) == value
+            assert lazy_slots.get_or_insert_with(k, _ctx_factory(lookup)) == value
 
 
 @pytest.mark.parametrize(
