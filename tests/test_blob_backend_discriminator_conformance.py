@@ -18,12 +18,39 @@ inverts the ``resolve_wrong_backend`` theorem in that same doc: it leaves a
 64-bit checksum to discharge probabilistically what routing was supposed to
 guarantee structurally.
 
+Fixture v2 (14 scenarios: seven wire shapes x two codecs) adds the four facts v1
+declared or implied without carrying, and this runner replays all of them:
+
+* ``in_process`` — the THIRD declared backend. v1 shipped scenarios for two of
+  the three names in ``assertions.backends``, so a binding that knew only
+  ``{shm, arrow}`` refused ``in_process`` *conformingly by the letter of the
+  clause* and passed all eight v1 scenarios. The control is a SET DIFFERENCE
+  (``declared - decoded``), not a scenario count — see
+  :func:`_assert_backend_vocabulary_is_complete`.
+* an explicit ``null`` — the ABSENT form (§ NodeKey, ``#lzkeynullstrict``), not a
+  present-unknown one. A serde-style peer that skipped ``skip_serializing_if``
+  emits ``null`` where a conforming encoder omits, so refusing it is stricter
+  than the reference implementation on a frame the reference implementation
+  produces.
+* a non-string ``backend`` — the same refusal reached through a door the clause,
+  written entirely about TOKENS, does not describe. The refusal must arrive
+  through the codec's documented decode-error family, so this runner catches
+  ``Exception`` and asserts membership rather than pinning the family in a
+  ``pytest.raises``: a ``TypeError`` from downstream string handling refuses the
+  frame while failing PAST every caller's decode handler, and a
+  ``pytest.raises(ValueError)`` cannot tell that apart from a conforming refusal.
+* ``frame_epoch`` vs ``blob_epoch`` — v1 carried 9 in both the Delta frame and
+  the ShmBlobRef descriptor, so one ``expect.epoch`` was satisfied by a runner
+  reading either. They are separate facts (the frame epoch orders deltas, the
+  descriptor epoch names the arena incarnation) and are now asserted separately
+  against their own sources.
+
 The fixture carries its frames as raw text (json) and hex (msgpack) on purpose.
-``schemas/defs.json`` closes ``backend`` to an enum, so the reject frames are
-schema-INVALID by design and cannot be carried as parsed objects — the enum
-binds a conforming ENCODER, and these frames are what a DECODER must survive.
-This runner therefore decodes from the raw form and never re-serializes a parsed
-scenario body.
+``schemas/defs.json`` closes ``backend`` to an enum, so the reject frames AND the
+null frames are schema-INVALID by design and cannot be carried as parsed objects
+— the enum binds a conforming ENCODER, and these frames are what a DECODER must
+survive. This runner therefore decodes from the raw form and never re-serializes
+a parsed scenario body.
 
 Both halves of the clause are checked. Reading the field is only the decode half
 — a binding that echoes whatever it received back out has a correct decoded
@@ -35,8 +62,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
-import pytest
 from conformance_assert import (
     TrackedBlock,
     assert_key,
@@ -46,7 +73,12 @@ from conformance_assert import (
     scenarios,
 )
 
-from lazily.ipc import DeltaOp_SlotValue, IpcMessage, IpcValue_SharedBlob
+from lazily.ipc import (
+    BlobBackendKind,
+    DeltaOp_SlotValue,
+    IpcMessage,
+    IpcValue_SharedBlob,
+)
 from lazily.msgpack_codec import msgpack_pack, msgpack_unpack
 
 
@@ -54,6 +86,17 @@ _LOCAL_FIXTURES = Path(__file__).resolve().parent / "conformance"
 _SPEC_FIXTURES = Path(__file__).resolve().parents[2] / "lazily-spec" / "conformance"
 
 _FIXTURE = "codec/blob_backend_discriminator.json"
+
+#: The decode-error family this codec documents — the type a caller already
+#: guards a decode with. ``lazily.msgpack_codec.MsgpackCodecError`` and
+#: ``lazily.ipc.NodeKeyError`` are both ``ValueError`` subclasses, so one
+#: ``except ValueError`` around ``IpcMessage.from_wire`` catches every refusal
+#: the protocol defines. ``expect.rejection_is_decode_error`` is the assertion
+#: that a refusal really arrives here rather than as a ``TypeError`` or
+#: ``AttributeError`` escaping from downstream string handling: such a frame is
+#: still refused, but it is refused PAST the handler, so the peer never sees the
+#: protocol error and never resyncs.
+_DECODE_ERROR_FAMILY: type[Exception] = ValueError
 
 
 def _load() -> dict:
@@ -65,12 +108,12 @@ def _load() -> dict:
     return fixture
 
 
-def _wire(scenario) -> object:
+def _wire(scenario) -> Any:
     """Materialise the scenario's wire tree from its RAW carried form.
 
-    Never from a parsed scenario body: the reject frames carry a ``backend``
-    the corpus schema does not admit, so they exist in the fixture only as text
-    and hex.
+    Never from a parsed scenario body: the reject and null frames carry a
+    ``backend`` the corpus schema does not admit, so they exist in the fixture
+    only as text and hex.
     """
     codec = scenario["codec"]
     if codec == "json":
@@ -78,6 +121,11 @@ def _wire(scenario) -> object:
     if codec == "msgpack":
         return msgpack_unpack(bytes.fromhex(scenario["wire_msgpack_hex"]))
     raise AssertionError(f"unknown codec {codec!r}")
+
+
+def _wire_blob(wire: Any) -> dict[str, Any]:
+    """The SharedBlob map inside a wire tree, decoded or re-encoded."""
+    return wire["Delta"]["ops"][0]["SlotValue"]["payload"]["SharedBlob"]
 
 
 def _blob(message: IpcMessage):
@@ -89,10 +137,10 @@ def _blob(message: IpcMessage):
     assert isinstance(payload, IpcValue_SharedBlob), (
         "the fixture carries a SharedBlob payload"
     )
-    return op, payload.blob
+    return delta, op, payload.blob
 
 
-def _reencoded_blob(scenario, message: IpcMessage) -> dict:
+def _reencoded_blob(scenario, message: IpcMessage) -> dict[str, Any]:
     """Re-encode under the scenario's own codec, then read the field set back.
 
     Through the wire tree rather than the typed object: the typed object always
@@ -104,7 +152,69 @@ def _reencoded_blob(scenario, message: IpcMessage) -> dict:
         # Round-trip through the msgpack codec so this asserts what THAT
         # encoder produced, rather than assuming both codecs share `to_wire()`.
         wire = msgpack_unpack(msgpack_pack(wire))
-    return wire["Delta"]["ops"][0]["SlotValue"]["payload"]["SharedBlob"]
+    return _wire_blob(wire)
+
+
+def _observed_rejection_kind(scenario, wire: Any) -> str:
+    """Classify a reject frame from the WIRE, not from the fixture's label.
+
+    ``expect.rejection_kind`` is then asserted against this, so the key is a real
+    comparison rather than a value copied out of the fixture and handed back to
+    it. The two kinds are refusals of different things — a token outside the enum
+    versus a value that is not a token at all — and only the second reaches the
+    coercion path where a runtime that reads ``7`` as ``"7"`` normalizes
+    silently.
+    """
+    blob = _wire_blob(wire)
+    assert "backend" in blob, (
+        f"{scenario['id']}: a reject frame must carry a PRESENT `backend`; "
+        f"absence is the lenient form and cannot be refused"
+    )
+    raw = blob["backend"]
+    if not isinstance(raw, str):
+        return "non_string"
+    return "unknown_token"
+
+
+def _assert_backend_vocabulary_is_complete(
+    block: TrackedBlock, decoded_backends: set[str]
+) -> None:
+    """Every backend the clause DECLARES must be reachable by a real decode.
+
+    This is the control v1 lacked, and it is a set difference on purpose: the
+    fixture declared three backends and carried scenarios for two, so a binding
+    implementing a two-member enum refused ``in_process`` — naming the token,
+    conformingly — and passed every scenario in the file. No count of scenarios,
+    and no assertion over any single scenario, reaches that. Only ``declared -
+    decoded`` does.
+
+    The reverse containment is asserted too: a backend this build decodes but the
+    clause does not name is a private extension to a wire vocabulary, which is
+    the same interoperability failure pointing the other way.
+    """
+    declared = assert_key_with(block, "backends", where="vocabulary completeness")
+    missing = sorted(set(declared) - decoded_backends)
+    assert not missing, (
+        f"backend(s) {missing} are declared in `assertions.backends` but no accept "
+        f"scenario decoded to them. Either the binding implements a SMALLER enum "
+        f"than the clause declares (it refuses the token, conformingly, and still "
+        f"contradicts the protocol), or the fixture declares a backend it does not "
+        f"carry — which is exactly how v1 shipped without `in_process`."
+    )
+    extra = sorted(decoded_backends - set(declared))
+    assert not extra, (
+        f"decoded backend(s) {extra} are not declared in `assertions.backends`: "
+        f"this build accepts a token the wire vocabulary does not define"
+    )
+    # The library's own enum is the third witness. The set difference above is
+    # satisfied by any decoder that reaches all three names; this catches an enum
+    # carrying a FOURTH the corpus never exercises, which would be accepted on
+    # the wire while no peer knows it.
+    implemented = {kind.value for kind in BlobBackendKind}
+    assert implemented == set(declared), (
+        f"BlobBackendKind implements {sorted(implemented)}, the clause declares "
+        f"{sorted(set(declared))}"
+    )
 
 
 def test_blob_backend_discriminator_conformance() -> None:
@@ -112,18 +222,17 @@ def test_blob_backend_discriminator_conformance() -> None:
 
     block: TrackedBlock = fixture["assertions"]
     assert_key(block, "required_of_binding", "MUST")
-    assert_key(block, "codecs", ["json", "msgpack"])
-    assert_key(block, "backends", ["shm", "arrow", "in_process"])
-    assert_key(block, "outcomes", ["accept", "reject"])
-    assert_key(block, "scenario_count", len(fixture["scenarios"]))
-    for prose in (
+
+    # Prose. Each excuse names the assertion that carries the obligation the
+    # prose states — an excuse is a claim someone looked, not a way to skip.
+    excuse_key(
+        block,
         "clause",
-        "wire_encoding",
-        "reject_obligation",
-        "anti_vacuity",
-        "theorem",
-        "generator",
-    ):
+        "prose: it states WHY the fixture is shaped this way; the behaviour it "
+        "describes is asserted by the per-scenario decode, re-encode and "
+        "rejection below",
+    )
+    for prose in ("wire_encoding", "anti_vacuity", "theorem", "generator"):
         excuse_key(
             block,
             prose,
@@ -131,8 +240,49 @@ def test_blob_backend_discriminator_conformance() -> None:
             "describes is asserted by the per-scenario decode, re-encode and "
             "rejection below",
         )
+    excuse_key(
+        block,
+        "reject_obligation",
+        "prose: the obligation it states — that the refusal NAME the token rather "
+        "than merely occur — is asserted by the `error_names_token` substring "
+        "check in the unknown_token arm of the reject branch",
+    )
+    excuse_key(
+        block,
+        "backend_form_vocabulary",
+        "prose: the obligation it states — that every backend in "
+        "`assertions.backends` appear as some accept scenario's `decoded_backend` "
+        "— is asserted as a set difference in "
+        "_assert_backend_vocabulary_is_complete, and the seven wire shapes it "
+        "enumerates are asserted against the replayed forms via `backend_forms`",
+    )
+    excuse_key(
+        block,
+        "null_form",
+        "prose: the rule it states — an explicit null is the ABSENT form and "
+        "decodes as `shm`, and does not survive the round trip — is asserted by "
+        "the backend_null_{json,msgpack} scenarios' `decoded_backend` and "
+        "`reencoded_backend_field_present` expectations",
+    )
+    excuse_key(
+        block,
+        "non_string_form",
+        "prose: the rule it states — a present non-string is refused, through the "
+        "SAME error family as the unknown token — is asserted by "
+        "`rejection_is_decode_error` against isinstance(error, ValueError) with "
+        "the raise caught as bare Exception, and by `rejection_kind` classified "
+        "from the wire",
+    )
+    excuse_key(
+        block,
+        "epoch_disambiguation",
+        "prose: the distinction it draws is asserted by `frame_epoch` against "
+        "delta.epoch and `blob_epoch` against blob.epoch, which carry different "
+        "numbers (9 and 5), so a runner reading one where the other belongs is "
+        "now red",
+    )
 
-    # Anti-vacuity, in the three directions the fixture names. `accepted` and
+    # Anti-vacuity, in the directions the fixture names. `accepted` and
     # `rejected` are the two outcomes, and a runner that decoded nothing would
     # book zero of the first; `decoded_backends` is the set of DISTINCT values a
     # real decode produced, so a decoder that ignores the field and hardcodes
@@ -141,29 +291,77 @@ def test_blob_backend_discriminator_conformance() -> None:
     rejected = 0
     decoded_backends: set[str] = set()
     reencode_present = 0
+    observed_codecs: set[str] = set()
+    observed_outcomes: set[str] = set()
+    observed_forms: set[str] = set()
+    observed_rejection_kinds: set[str] = set()
+    forms_by_codec: dict[str, set[str]] = {}
 
     for scenario in scenarios(fixture):
         expect: TrackedBlock = scenario["expect"]
         assert scenario["variant"] == "Delta", (
             f"{scenario['id']}: the fixture declares the Delta variant"
         )
+        codec = scenario["codec"]
+        form = scenario["backend_form"]
+        observed_codecs.add(codec)
+        observed_outcomes.add(scenario["outcome"])
+        observed_forms.add(form)
+        forms_by_codec.setdefault(codec, set()).add(form)
         wire = _wire(scenario)
 
         if scenario["outcome"] == "reject":
-            with pytest.raises(ValueError) as excinfo:
+            # Caught as bare `Exception`, NOT as `pytest.raises(ValueError)`.
+            # Pinning the family in the raises-context makes
+            # `rejection_is_decode_error` unfalsifiable: a stray TypeError from
+            # downstream string handling would fail the context manager with
+            # "DID NOT RAISE"-shaped noise instead of failing the assertion that
+            # names the real defect. The refusal has to be CLASSIFIED, not
+            # assumed.
+            try:
                 IpcMessage.from_wire(wire)
+            except Exception as exc:
+                error: Exception = exc
+            else:
+                raise AssertionError(
+                    f"{scenario['id']}: the frame was ACCEPTED. A present "
+                    f"`backend` outside the enum must be refused, not normalized "
+                    f"to `shm` (#lzblobbackendstrict)"
+                )
             rejected += 1
             assert_key(expect, "rejected", True)
-            # The discriminating assertion. A decoder that refuses this frame
-            # because it mis-parsed `checksum` satisfies a bare is-error check
-            # while implementing none of the clause; only the token in the
-            # message separates the two.
-            text = str(excinfo.value)
-            token = assert_key_with(expect, "error_names_token")
-            assert token in text, (
-                f"{scenario['id']}: the rejection does not name the offending "
-                f"token {token!r} — message was {text!r}"
+
+            kind = _observed_rejection_kind(scenario, wire)
+            observed_rejection_kinds.add(kind)
+            assert_key(expect, "rejection_kind", kind)
+
+            # The family assertion. A refusal outside the type every caller
+            # already guards a decode with fails PAST the handler: the frame is
+            # still refused and the peer still never sees the error.
+            assert_key(
+                expect,
+                "rejection_is_decode_error",
+                isinstance(error, _DECODE_ERROR_FAMILY),
+                where=f"raised {type(error).__name__}",
             )
+
+            text = str(error)
+            if kind == "unknown_token":
+                # The discriminating assertion. A decoder that refuses this frame
+                # because it mis-parsed `checksum` satisfies a bare is-error
+                # check while implementing none of the clause; only the token in
+                # the message separates the two.
+                token = assert_key_with(expect, "error_names_token")
+                assert token in text, (
+                    f"{scenario['id']}: the rejection does not name the offending "
+                    f"token {token!r} — message was {text!r}"
+                )
+            else:
+                assert "error_names_token" not in expect, (
+                    f"{scenario['id']}: a non_string rejection has no token to "
+                    f"name; requiring one would pin a message format no codec's "
+                    f"native type error carries"
+                )
             continue
 
         assert scenario["outcome"] == "accept", (
@@ -172,17 +370,19 @@ def test_blob_backend_discriminator_conformance() -> None:
         message = IpcMessage.from_wire(wire)
         accepted += 1
 
-        op, blob = _blob(message)
+        delta, op, blob = _blob(message)
         decoded_backends.add(blob.backend.value)
 
-        # The decode half: absence and an explicit `shm` both arrive as SHM,
-        # and `arrow` arrives as ARROW rather than being flattened.
+        # The decode half: absence, an explicit `shm` and an explicit NULL all
+        # arrive as SHM, while `arrow` and `in_process` arrive as themselves
+        # rather than being flattened.
         assert_key(expect, "decoded_backend", blob.backend.value)
 
         # The encode half, which no assertion over the decoded value reaches: a
         # conforming encoder OMITS the default, so a pre-field descriptor
         # round-trips byte-identically and a binding cannot satisfy the clause
-        # by echoing back whatever it received.
+        # by echoing back whatever it received. It is also where the null form
+        # is pinned: an accepted null must not survive the round trip.
         reencoded = _reencoded_blob(scenario, message)
         present = "backend" in reencoded
         if present:
@@ -193,22 +393,50 @@ def test_blob_backend_discriminator_conformance() -> None:
         assert_key(expect, "offset", blob.offset)
         assert_key(expect, "len", blob.len)
         assert_key(expect, "generation", blob.generation)
-        assert_key(expect, "epoch", blob.epoch)
+        # Two epochs, two sources. The Delta frame's epoch orders deltas; the
+        # descriptor's epoch names the arena incarnation the blob was written
+        # into. v1 carried 9 in both, so a runner reading either satisfied one
+        # `expect.epoch` — that key is GONE, and reading the wrong source now
+        # compares 9 against 5.
+        assert_key(expect, "frame_epoch", delta.epoch)
+        assert_key(expect, "blob_epoch", blob.epoch)
         assert_key(expect, "checksum", blob.checksum)
 
-    assert accepted == 6, (
-        f"accepted {accepted} scenarios, want 6: three backend forms x two codecs"
+    assert accepted == 10, (
+        f"accepted {accepted} scenarios, want 10: five accepting backend forms "
+        f"(omitted, shm, arrow, in_process, null) x two codecs"
     )
-    assert rejected == 2, (
-        f"rejected {rejected} scenarios, want 2: the `rdma` frame under each codec"
+    assert rejected == 4, (
+        f"rejected {rejected} scenarios, want 4: the `rdma` and non-string frames "
+        f"under each codec"
     )
-    assert decoded_backends == {"shm", "arrow"}, (
-        f"decoded backends {sorted(decoded_backends)}, want ['arrow', 'shm']: a "
-        "decoder that discards the discriminator and hardcodes `shm` still passes "
-        "the omitted and explicit-shm scenarios, and only this set sees it"
+    assert_key(block, "scenario_count", accepted + rejected)
+    assert_key(block, "codecs", sorted(observed_codecs))
+    assert_key(block, "outcomes", sorted(observed_outcomes))
+    assert_key_with(
+        block,
+        "backend_forms",
+        lambda want: sorted(want) == sorted(observed_forms),
+        where=f"replayed forms {sorted(observed_forms)}",
     )
-    assert reencode_present == 2, (
-        f"re-encoded the field in {reencode_present} scenarios, want 2: only the "
-        "`arrow` frames may carry it, and a binding that echoes the received field "
-        "back out writes it in four"
+    assert_key_with(
+        block,
+        "rejection_kinds",
+        lambda want: sorted(want) == sorted(observed_rejection_kinds),
+        where=f"observed kinds {sorted(observed_rejection_kinds)}",
+    )
+    # Every wire shape is carried under BOTH codecs. Several bindings bridge
+    # msgpack into the same DOM the JSON decoder produces, so this proves the
+    # bridge and the encoder, NOT two independent discriminator verdicts — see
+    # `assertions.anti_vacuity`, which says so in as many words.
+    assert forms_by_codec == dict.fromkeys(observed_codecs, observed_forms), (
+        f"each backend form must be replayed under every codec; got {forms_by_codec}"
+    )
+
+    _assert_backend_vocabulary_is_complete(block, decoded_backends)
+
+    assert reencode_present == 4, (
+        f"re-encoded the field in {reencode_present} scenarios, want 4: only the "
+        "`arrow` and `in_process` frames may carry it, and a binding that echoes "
+        "the received field back out writes it in six"
     )

@@ -284,6 +284,18 @@ class BlobBackendKind(Enum):
         returns bytes where a refusal would have been a visible protocol error
         the peer recovers from by resync.
 
+        Two shapes that are not tokens fall out of the same split. An explicit
+        ``null`` never reaches here — :meth:`ShmBlobRef.from_wire` reads it as
+        the ABSENT form (§ NodeKey, ``#lzkeynullstrict``), because a serde-style
+        peer that skipped ``skip_serializing_if`` emits ``null`` where a
+        conforming encoder omits, so refusing it would be stricter than the
+        reference implementation on a frame the reference implementation
+        produces. A present value that is not a string DOES reach here and is
+        refused as a :class:`ValueError` — the same family the unknown token
+        raises, and the one every caller already guards a decode with, so one
+        ``except`` handles both. A refusal raised outside that family still
+        rejects the frame but rejects it PAST the handler.
+
         Replayed by ``codec/blob_backend_discriminator.json``; pinned by
         ``tests/test_library_leniency.py``.
         """

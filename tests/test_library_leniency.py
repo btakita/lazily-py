@@ -92,6 +92,34 @@ def test_pin_blob_backend_omitted_field_reads_as_shm() -> None:
     assert BlobBackendKind.from_wire("in_process") is BlobBackendKind.IN_PROCESS
 
 
+def test_pin_blob_backend_explicit_null_reads_as_shm() -> None:
+    """``ShmBlobRef.from_wire`` — an explicit ``null`` is the ABSENT form.
+
+    Not a present-unknown one (§ NodeKey, ``#lzkeynullstrict``). A serde-style
+    peer that did not apply ``skip_serializing_if`` to an optional field emits
+    ``null`` where a conforming encoder omits, so refusing it would be stricter
+    than the reference implementation on a frame the reference implementation
+    produces. Four bindings split three ways on this while implementing v1 of
+    ``codec/blob_backend_discriminator.json``, which is why it is pinned rather
+    than left to the reader.
+
+    The encoder half is unchanged: the null does not survive the round trip.
+    """
+    ref = ShmBlobRef.from_wire(
+        {
+            "offset": 40,
+            "len": 17,
+            "generation": 2,
+            "epoch": 5,
+            "checksum": 987654321,
+            "backend": None,
+        }
+    )
+    assert ref.backend is BlobBackendKind.SHM
+    assert "backend" not in ref.to_wire()
+    assert BlobBackendKind.from_wire("in_process") is BlobBackendKind.IN_PROCESS
+
+
 def test_pin_capability_handshake_optional_fields_default_conservatively() -> None:
     """``CapabilityHandshake.from_wire`` — the three optional capability fields
     default to the conservative reading of silence, and unknown extra keys are
@@ -267,6 +295,35 @@ def test_reject_unknown_blob_backend_token() -> None:
                 "epoch": 9,
                 "checksum": 987654321,
                 "backend": "rdma",
+            }
+        )
+
+
+def test_reject_non_string_blob_backend_through_the_decode_error_family() -> None:
+    """A PRESENT ``backend`` that is not a string is refused as a ``ValueError``.
+
+    The clause is written entirely about TOKENS, so this is the door it does not
+    describe: a runtime whose reader coerces rather than throws on a number in a
+    string position normalizes silently while passing every token case. The type
+    matters as much as the refusal — ``ValueError`` is the family every caller
+    already guards a decode with (``MsgpackCodecError`` and ``NodeKeyError`` both
+    subclass it), and a ``TypeError`` escaping from downstream string handling
+    refuses the frame PAST the handler, so the peer never sees the protocol error
+    and never resyncs.
+    """
+    for value in (7, [], {}, True, b"shm"):
+        with pytest.raises(ValueError):
+            BlobBackendKind.from_wire(value)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError):
+        ShmBlobRef.from_wire(
+            {
+                "offset": 40,
+                "len": 17,
+                "generation": 2,
+                "epoch": 5,
+                "checksum": 987654321,
+                "backend": 7,
             }
         )
 

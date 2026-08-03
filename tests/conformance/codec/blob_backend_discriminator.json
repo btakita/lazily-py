@@ -1,9 +1,9 @@
 {
-  "description": "Blob-backend discriminator strictness on decode (protocol.md \u00a7 Zero-copy blob descriptor, `#lzblobbackendstrict`). `backend` is optional and defaults to `shm`, and that OPTIONALITY is the forward-compatibility channel \u2014 it carries every descriptor minted before the field existed. A present value outside the enum is a different fact and gets the opposite answer: the decoder MUST reject the frame and name the token. Audited across nine bindings, which split 5-2 the wrong way while each documented its choice as deliberate; an undocumented default and a deliberate one are indistinguishable from the outside, and so, it turns out, are two deliberate ones pointing in opposite directions.",
+  "description": "Blob-backend discriminator strictness on decode (protocol.md \u00a7 Zero-copy blob descriptor, `#lzblobbackendstrict`). `backend` is optional and defaults to `shm`, and that OPTIONALITY is the forward-compatibility channel \u2014 it carries every descriptor minted before the field existed. A present value outside the enum is a different fact and gets the opposite answer: the decoder MUST reject the frame and name the token. Audited across nine bindings, which split 5-2 the wrong way while each documented its choice as deliberate; an undocumented default and a deliberate one are indistinguishable from the outside, and so, it turns out, are two deliberate ones pointing in opposite directions. FIXTURE v2 adds the four shapes v1 declared or implied without carrying \u2014 `in_process`, an explicit null, a non-string value, and a Delta epoch distinct from the descriptor epoch \u2014 every one of which was found by a binding REPLAYING v1 rather than by reviewing it.",
   "protocol_version": 1,
   "kind": "BlobBackendDiscriminator",
   "assertions": {
-    "clause": "an OMITTED `backend` MUST decode as `shm`; a PRESENT `backend` outside {shm, arrow, in_process} MUST be rejected, naming the token, and MUST NOT be normalized to `shm` or to any other backend",
+    "clause": "an OMITTED or NULL `backend` MUST decode as `shm`; a PRESENT `backend` that is not one of {shm, arrow, in_process} MUST be rejected through the codec's documented decode-error family \u2014 naming the token when there is one \u2014 and MUST NOT be normalized to `shm` or to any other backend",
     "required_of_binding": "MUST",
     "codecs": [
       "json",
@@ -14,14 +14,31 @@
       "arrow",
       "in_process"
     ],
+    "backend_forms": [
+      "omitted",
+      "shm",
+      "arrow",
+      "in_process",
+      "null",
+      "non_string",
+      "rdma"
+    ],
     "outcomes": [
       "accept",
       "reject"
     ],
-    "scenario_count": 8,
+    "rejection_kinds": [
+      "unknown_token",
+      "non_string"
+    ],
+    "scenario_count": 14,
     "wire_encoding": "json scenarios carry `wire_json` as RAW TEXT and msgpack scenarios carry `wire_msgpack_hex` as lowercase hex, so the exact wire form under test \u2014 an ABSENT map entry versus a present short string \u2014 survives into the runner. The reject scenarios additionally CANNOT be carried as a parsed object: `schemas/defs.json` closes `backend` to an enum, so a fixture embedding `\"backend\": \"rdma\"` as structured JSON would fail the corpus's own schema gate. The enum binds a conforming ENCODER; these frames are what a decoder must survive, which is the same split `nodekey_null_leniency.json` makes.",
+    "backend_form_vocabulary": "The seven wire shapes `backend` can arrive in, each carried in both codecs. Four are TOKENS (`shm`, `arrow`, `in_process`, `rdma`) and three are not: `omitted` writes no map entry at all, `null` writes an explicit nil, and `non_string` writes an integer in the slot a token belongs in. A runner MUST check that every backend in `assertions.backends` appears as the `decoded_backend` of some accept scenario \u2014 that is the assertion which would have caught v1's missing `in_process`, and it cannot be derived from a scenario count.",
     "reject_obligation": "A rejecting binding MUST name the offending token in its error. The failure this pins is not 'the frame was refused' but 'the frame was refused for the stated reason': a decoder that rejects the descriptor because it mis-parsed `checksum` passes a bare is-error assertion while implementing none of the clause. `error_names_token` is the assertion that separates them.",
-    "anti_vacuity": "Three controls, each defeating a different way to pass without implementing the clause. (1) `backend_omitted` forces a real decode \u2014 a runner that reports `shm` without decoding satisfies it only by accident and fails `backend_arrow`. (2) `backend_arrow` forces the field to actually be READ \u2014 a decoder that ignores `backend` entirely and hardcodes `shm` passes the omitted and explicit-shm scenarios and fails here. (3) `backend_shm_explicit` forces the ENCODER half: `reencoded_backend_field_present` is false for shm and true for arrow, so a binding cannot satisfy the clause by round-tripping whatever it received. Without (2) and (3) a decoder that discards the discriminator passes four of six scenarios.",
+    "null_form": "An explicit `backend: null` is the ABSENT form, not a present-unknown one, and decodes as `shm` (protocol.md \u00a7 the `backend` discriminator, following \u00a7 NodeKey and `#lzkeynullstrict`). A serde-style peer that did not apply `skip_serializing_if` to an optional field emits `null` where a conforming encoder omits, so refusing it is stricter than the reference implementation on a frame the reference implementation produces. The null frames are therefore accept scenarios that are deliberately schema-INVALID: `schemas/defs.json` types `backend` as a string, which binds the ENCODER, and the decoder's leniency is a separate fact. Four bindings raised this edge independently while implementing v1 and had already split three ways on it \u2014 accept-as-`shm`, an ExpectedString error naming nothing, and a refusal naming the empty token \u2014 which is why it is a scenario rather than a sentence.",
+    "non_string_form": "A `backend` that is present and not a string MUST be rejected, and the refusal MUST arrive through the codec's documented decode-error family \u2014 the same family the unknown-token refusal uses, so one catch handles both. That second half is the whole point of the scenario: a refusal raised as a type outside the family every caller already guards a decode with is invisible, because the frame still fails but it fails past the handler. `error_names_token` is NOT asserted here; there is no token to name, and requiring the field name would pin a message format no codec's native type error carries. `rejection_kind` tells the runner which of the two refusals it is looking at.",
+    "epoch_disambiguation": "`expect.frame_epoch` and `expect.blob_epoch` are DIFFERENT numbers, and `expect.epoch` no longer exists. v1 carried 9 in both the Delta frame and the ShmBlobRef descriptor, so a runner reading the frame's epoch and a runner reading the descriptor's both satisfied one `expect.epoch` \u2014 the assertion could not tell them apart, and two bindings reported it independently. They are separate facts (the frame epoch orders deltas; the descriptor epoch is the arena incarnation the blob was written into). The old key was REMOVED rather than redefined so a runner still reading it fails loudly instead of silently reading the other one.",
+    "anti_vacuity": "Four controls, each defeating a different way to pass without implementing the clause. (1) `backend_omitted` forces a real decode \u2014 a runner that reports `shm` without decoding satisfies it only by accident and fails `backend_arrow`. (2) `backend_arrow` forces the field to actually be READ \u2014 a decoder that ignores `backend` entirely and hardcodes `shm` passes the omitted and explicit-shm scenarios and fails here. (3) `backend_shm_explicit` forces the ENCODER half: `reencoded_backend_field_present` is false for shm and true for arrow, so a binding cannot satisfy the clause by round-tripping whatever it received. (4) `backend_in_process` forces the VOCABULARY to be complete: v1 declared three backends in `assertions.backends` and carried scenarios for two, so a binding knowing only {shm, arrow} rejected `in_process` \u2014 naming the token, conformingly \u2014 and passed all eight scenarios while contradicting the enum this clause declares. Reading the discriminator and knowing the vocabulary are different facts and now have different controls. TWO CODECS ARE NOT TWO IMPLEMENTATIONS: several bindings bridge MessagePack into the same DOM the JSON decoder produces, or share one serde impl, so the msgpack half of a scenario pair can yield ONE discriminator verdict rather than an independent second one. It still covers the bridge and the encoder; a fully green run must not be read as two implementations agreeing. A binding whose two codecs share a decode path should record that in its own ledger rather than infer independence from the scenario count.",
     "theorem": "resolve_wrong_backend (docs/zero-copy-transport.md) \u2014 a descriptor of one kind never resolves against a different backend's table, so receivers route by kind. Normalizing an unknown kind to `shm` routes rather than refuses, which is what makes it non-conforming even though the checksum usually hides the consequence.",
     "generator": "scripts/gen_blob_backend_discriminator_fixture.py"
   },
@@ -34,7 +51,7 @@
       "outcome": "accept",
       "variant": "Delta",
       "description": "The forward-compatibility channel, and the only one. Every descriptor minted before `backend` existed has this shape, which is why the field is optional and why a decoder MUST read its absence as `shm`. This is also the control that forces a real decode.",
-      "wire_json": "{\"Delta\": {\"base_epoch\": 8, \"epoch\": 9, \"ops\": [{\"SlotValue\": {\"node\": 7, \"payload\": {\"SharedBlob\": {\"offset\": 40, \"len\": 17, \"generation\": 2, \"epoch\": 9, \"checksum\": 987654321}}}}]}}",
+      "wire_json": "{\"Delta\": {\"base_epoch\": 8, \"epoch\": 9, \"ops\": [{\"SlotValue\": {\"node\": 7, \"payload\": {\"SharedBlob\": {\"offset\": 40, \"len\": 17, \"generation\": 2, \"epoch\": 5, \"checksum\": 987654321}}}}]}}",
       "expect": {
         "decoded_backend": "shm",
         "reencoded_backend_field_present": false,
@@ -42,7 +59,8 @@
         "offset": 40,
         "len": 17,
         "generation": 2,
-        "epoch": 9,
+        "frame_epoch": 9,
+        "blob_epoch": 5,
         "checksum": 987654321
       }
     },
@@ -54,7 +72,7 @@
       "outcome": "accept",
       "variant": "Delta",
       "description": "The forward-compatibility channel, and the only one. Every descriptor minted before `backend` existed has this shape, which is why the field is optional and why a decoder MUST read its absence as `shm`. This is also the control that forces a real decode.",
-      "wire_msgpack_hex": "81a544656c746183aa626173655f65706f636808a565706f636809a36f70739181a9536c6f7456616c756582a46e6f646507a77061796c6f616481aa536861726564426c6f6285a66f666673657428a36c656e11aa67656e65726174696f6e02a565706f636809a8636865636b73756dce3ade68b1",
+      "wire_msgpack_hex": "81a544656c746183aa626173655f65706f636808a565706f636809a36f70739181a9536c6f7456616c756582a46e6f646507a77061796c6f616481aa536861726564426c6f6285a66f666673657428a36c656e11aa67656e65726174696f6e02a565706f636805a8636865636b73756dce3ade68b1",
       "expect": {
         "decoded_backend": "shm",
         "reencoded_backend_field_present": false,
@@ -62,7 +80,8 @@
         "offset": 40,
         "len": 17,
         "generation": 2,
-        "epoch": 9,
+        "frame_epoch": 9,
+        "blob_epoch": 5,
         "checksum": 987654321
       }
     },
@@ -74,7 +93,7 @@
       "outcome": "accept",
       "variant": "Delta",
       "description": "The redundant-but-legal form. A conforming encoder OMITS `backend` when it is `shm`, so a decoder must accept this on the way in and must not emit it on the way out \u2014 `reencoded_backend_field_present` is false here and true for arrow, which is the encoder half of the clause.",
-      "wire_json": "{\"Delta\": {\"base_epoch\": 8, \"epoch\": 9, \"ops\": [{\"SlotValue\": {\"node\": 7, \"payload\": {\"SharedBlob\": {\"offset\": 40, \"len\": 17, \"generation\": 2, \"epoch\": 9, \"checksum\": 987654321, \"backend\": \"shm\"}}}}]}}",
+      "wire_json": "{\"Delta\": {\"base_epoch\": 8, \"epoch\": 9, \"ops\": [{\"SlotValue\": {\"node\": 7, \"payload\": {\"SharedBlob\": {\"offset\": 40, \"len\": 17, \"generation\": 2, \"epoch\": 5, \"checksum\": 987654321, \"backend\": \"shm\"}}}}]}}",
       "expect": {
         "decoded_backend": "shm",
         "reencoded_backend_field_present": false,
@@ -82,7 +101,8 @@
         "offset": 40,
         "len": 17,
         "generation": 2,
-        "epoch": 9,
+        "frame_epoch": 9,
+        "blob_epoch": 5,
         "checksum": 987654321
       }
     },
@@ -94,7 +114,7 @@
       "outcome": "accept",
       "variant": "Delta",
       "description": "The redundant-but-legal form. A conforming encoder OMITS `backend` when it is `shm`, so a decoder must accept this on the way in and must not emit it on the way out \u2014 `reencoded_backend_field_present` is false here and true for arrow, which is the encoder half of the clause.",
-      "wire_msgpack_hex": "81a544656c746183aa626173655f65706f636808a565706f636809a36f70739181a9536c6f7456616c756582a46e6f646507a77061796c6f616481aa536861726564426c6f6286a66f666673657428a36c656e11aa67656e65726174696f6e02a565706f636809a8636865636b73756dce3ade68b1a76261636b656e64a373686d",
+      "wire_msgpack_hex": "81a544656c746183aa626173655f65706f636808a565706f636809a36f70739181a9536c6f7456616c756582a46e6f646507a77061796c6f616481aa536861726564426c6f6286a66f666673657428a36c656e11aa67656e65726174696f6e02a565706f636805a8636865636b73756dce3ade68b1a76261636b656e64a373686d",
       "expect": {
         "decoded_backend": "shm",
         "reencoded_backend_field_present": false,
@@ -102,7 +122,8 @@
         "offset": 40,
         "len": 17,
         "generation": 2,
-        "epoch": 9,
+        "frame_epoch": 9,
+        "blob_epoch": 5,
         "checksum": 987654321
       }
     },
@@ -114,7 +135,7 @@
       "outcome": "accept",
       "variant": "Delta",
       "description": "A second real backend, so the leniency above cannot be implemented by ignoring the field outright. A decoder that hardcodes `shm` passes both scenarios above and fails here. It is also the scenario that proves the enum is genuinely multi-valued on the wire, which is what makes routing by `kind` (the resolve_wrong_backend theorem) meaningful at all.",
-      "wire_json": "{\"Delta\": {\"base_epoch\": 8, \"epoch\": 9, \"ops\": [{\"SlotValue\": {\"node\": 7, \"payload\": {\"SharedBlob\": {\"offset\": 40, \"len\": 17, \"generation\": 2, \"epoch\": 9, \"checksum\": 987654321, \"backend\": \"arrow\"}}}}]}}",
+      "wire_json": "{\"Delta\": {\"base_epoch\": 8, \"epoch\": 9, \"ops\": [{\"SlotValue\": {\"node\": 7, \"payload\": {\"SharedBlob\": {\"offset\": 40, \"len\": 17, \"generation\": 2, \"epoch\": 5, \"checksum\": 987654321, \"backend\": \"arrow\"}}}}]}}",
       "expect": {
         "decoded_backend": "arrow",
         "reencoded_backend_field_present": true,
@@ -122,7 +143,8 @@
         "offset": 40,
         "len": 17,
         "generation": 2,
-        "epoch": 9,
+        "frame_epoch": 9,
+        "blob_epoch": 5,
         "checksum": 987654321
       }
     },
@@ -134,7 +156,7 @@
       "outcome": "accept",
       "variant": "Delta",
       "description": "A second real backend, so the leniency above cannot be implemented by ignoring the field outright. A decoder that hardcodes `shm` passes both scenarios above and fails here. It is also the scenario that proves the enum is genuinely multi-valued on the wire, which is what makes routing by `kind` (the resolve_wrong_backend theorem) meaningful at all.",
-      "wire_msgpack_hex": "81a544656c746183aa626173655f65706f636808a565706f636809a36f70739181a9536c6f7456616c756582a46e6f646507a77061796c6f616481aa536861726564426c6f6286a66f666673657428a36c656e11aa67656e65726174696f6e02a565706f636809a8636865636b73756dce3ade68b1a76261636b656e64a56172726f77",
+      "wire_msgpack_hex": "81a544656c746183aa626173655f65706f636808a565706f636809a36f70739181a9536c6f7456616c756582a46e6f646507a77061796c6f616481aa536861726564426c6f6286a66f666673657428a36c656e11aa67656e65726174696f6e02a565706f636805a8636865636b73756dce3ade68b1a76261636b656e64a56172726f77",
       "expect": {
         "decoded_backend": "arrow",
         "reencoded_backend_field_present": true,
@@ -142,7 +164,92 @@
         "offset": 40,
         "len": 17,
         "generation": 2,
-        "epoch": 9,
+        "frame_epoch": 9,
+        "blob_epoch": 5,
+        "checksum": 987654321
+      }
+    },
+    {
+      "id": "backend_in_process_json",
+      "name": "backend_in_process_json",
+      "codec": "json",
+      "backend_form": "in_process",
+      "outcome": "accept",
+      "variant": "Delta",
+      "description": "The THIRD declared backend, and the one v1 declared without carrying. A binding that knows only {shm, arrow} rejects this token \u2014 naming it, conformingly, by the letter of the clause \u2014 and passed every v1 scenario while implementing a smaller enum than the clause declares. Three bindings reported the hole independently while replaying v1. `arrow` proves the discriminator is READ; this proves the vocabulary is COMPLETE, and no count of scenarios substitutes for it.",
+      "wire_json": "{\"Delta\": {\"base_epoch\": 8, \"epoch\": 9, \"ops\": [{\"SlotValue\": {\"node\": 7, \"payload\": {\"SharedBlob\": {\"offset\": 40, \"len\": 17, \"generation\": 2, \"epoch\": 5, \"checksum\": 987654321, \"backend\": \"in_process\"}}}}]}}",
+      "expect": {
+        "decoded_backend": "in_process",
+        "reencoded_backend_field_present": true,
+        "node": 7,
+        "offset": 40,
+        "len": 17,
+        "generation": 2,
+        "frame_epoch": 9,
+        "blob_epoch": 5,
+        "checksum": 987654321
+      }
+    },
+    {
+      "id": "backend_in_process_msgpack",
+      "name": "backend_in_process_msgpack",
+      "codec": "msgpack",
+      "backend_form": "in_process",
+      "outcome": "accept",
+      "variant": "Delta",
+      "description": "The THIRD declared backend, and the one v1 declared without carrying. A binding that knows only {shm, arrow} rejects this token \u2014 naming it, conformingly, by the letter of the clause \u2014 and passed every v1 scenario while implementing a smaller enum than the clause declares. Three bindings reported the hole independently while replaying v1. `arrow` proves the discriminator is READ; this proves the vocabulary is COMPLETE, and no count of scenarios substitutes for it.",
+      "wire_msgpack_hex": "81a544656c746183aa626173655f65706f636808a565706f636809a36f70739181a9536c6f7456616c756582a46e6f646507a77061796c6f616481aa536861726564426c6f6286a66f666673657428a36c656e11aa67656e65726174696f6e02a565706f636805a8636865636b73756dce3ade68b1a76261636b656e64aa696e5f70726f63657373",
+      "expect": {
+        "decoded_backend": "in_process",
+        "reencoded_backend_field_present": true,
+        "node": 7,
+        "offset": 40,
+        "len": 17,
+        "generation": 2,
+        "frame_epoch": 9,
+        "blob_epoch": 5,
+        "checksum": 987654321
+      }
+    },
+    {
+      "id": "backend_null_json",
+      "name": "backend_null_json",
+      "codec": "json",
+      "backend_form": "null",
+      "outcome": "accept",
+      "variant": "Delta",
+      "description": "An explicit null is the ABSENT form, not a present-unknown one, and decodes as `shm` \u2014 the \u00a7 NodeKey rule (`#lzkeynullstrict`), not the unknown-token rule, because a serde-style peer that skipped `skip_serializing_if` emits null where a conforming encoder omits. Refusing it would be stricter than the reference implementation on a frame the reference implementation produces. The encoder half still holds: the re-encoded frame carries no `backend` entry, so the null does not survive a round trip. This frame is deliberately schema-INVALID (see `assertions.null_form`) \u2014 the enum binds the encoder, and the decoder's leniency is the separate fact under test.",
+      "wire_json": "{\"Delta\": {\"base_epoch\": 8, \"epoch\": 9, \"ops\": [{\"SlotValue\": {\"node\": 7, \"payload\": {\"SharedBlob\": {\"offset\": 40, \"len\": 17, \"generation\": 2, \"epoch\": 5, \"checksum\": 987654321, \"backend\": null}}}}]}}",
+      "expect": {
+        "decoded_backend": "shm",
+        "reencoded_backend_field_present": false,
+        "node": 7,
+        "offset": 40,
+        "len": 17,
+        "generation": 2,
+        "frame_epoch": 9,
+        "blob_epoch": 5,
+        "checksum": 987654321
+      }
+    },
+    {
+      "id": "backend_null_msgpack",
+      "name": "backend_null_msgpack",
+      "codec": "msgpack",
+      "backend_form": "null",
+      "outcome": "accept",
+      "variant": "Delta",
+      "description": "An explicit null is the ABSENT form, not a present-unknown one, and decodes as `shm` \u2014 the \u00a7 NodeKey rule (`#lzkeynullstrict`), not the unknown-token rule, because a serde-style peer that skipped `skip_serializing_if` emits null where a conforming encoder omits. Refusing it would be stricter than the reference implementation on a frame the reference implementation produces. The encoder half still holds: the re-encoded frame carries no `backend` entry, so the null does not survive a round trip. This frame is deliberately schema-INVALID (see `assertions.null_form`) \u2014 the enum binds the encoder, and the decoder's leniency is the separate fact under test.",
+      "wire_msgpack_hex": "81a544656c746183aa626173655f65706f636808a565706f636809a36f70739181a9536c6f7456616c756582a46e6f646507a77061796c6f616481aa536861726564426c6f6286a66f666673657428a36c656e11aa67656e65726174696f6e02a565706f636805a8636865636b73756dce3ade68b1a76261636b656e64c0",
+      "expect": {
+        "decoded_backend": "shm",
+        "reencoded_backend_field_present": false,
+        "node": 7,
+        "offset": 40,
+        "len": 17,
+        "generation": 2,
+        "frame_epoch": 9,
+        "blob_epoch": 5,
         "checksum": 987654321
       }
     },
@@ -154,9 +261,11 @@
       "outcome": "reject",
       "variant": "Delta",
       "description": "The clause. A present `backend` outside the enum MUST be refused, naming the token. Five of nine bindings normalized it to `shm` and documented the normalization as forward-compat; that is the case this scenario exists to make non-conforming. Normalizing routes a non-shm descriptor into the shm table, which is the exact misroute resolve_wrong_backend proves cannot happen \u2014 the lenient bindings were relying on the generation/epoch/checksum verification to produce, probabilistically and downstream, the outcome the routing rule guarantees structurally. Note also what the normalization costs on the OTHER side: `shm` is a real backend this build resolves, so a checksum collision returns bytes, whereas a refusal is a visible protocol error the peer recovers from by resync.",
-      "wire_json": "{\"Delta\": {\"base_epoch\": 8, \"epoch\": 9, \"ops\": [{\"SlotValue\": {\"node\": 7, \"payload\": {\"SharedBlob\": {\"offset\": 40, \"len\": 17, \"generation\": 2, \"epoch\": 9, \"checksum\": 987654321, \"backend\": \"rdma\"}}}}]}}",
+      "wire_json": "{\"Delta\": {\"base_epoch\": 8, \"epoch\": 9, \"ops\": [{\"SlotValue\": {\"node\": 7, \"payload\": {\"SharedBlob\": {\"offset\": 40, \"len\": 17, \"generation\": 2, \"epoch\": 5, \"checksum\": 987654321, \"backend\": \"rdma\"}}}}]}}",
       "expect": {
         "rejected": true,
+        "rejection_kind": "unknown_token",
+        "rejection_is_decode_error": true,
         "error_names_token": "rdma"
       }
     },
@@ -168,10 +277,42 @@
       "outcome": "reject",
       "variant": "Delta",
       "description": "The clause. A present `backend` outside the enum MUST be refused, naming the token. Five of nine bindings normalized it to `shm` and documented the normalization as forward-compat; that is the case this scenario exists to make non-conforming. Normalizing routes a non-shm descriptor into the shm table, which is the exact misroute resolve_wrong_backend proves cannot happen \u2014 the lenient bindings were relying on the generation/epoch/checksum verification to produce, probabilistically and downstream, the outcome the routing rule guarantees structurally. Note also what the normalization costs on the OTHER side: `shm` is a real backend this build resolves, so a checksum collision returns bytes, whereas a refusal is a visible protocol error the peer recovers from by resync.",
-      "wire_msgpack_hex": "81a544656c746183aa626173655f65706f636808a565706f636809a36f70739181a9536c6f7456616c756582a46e6f646507a77061796c6f616481aa536861726564426c6f6286a66f666673657428a36c656e11aa67656e65726174696f6e02a565706f636809a8636865636b73756dce3ade68b1a76261636b656e64a472646d61",
+      "wire_msgpack_hex": "81a544656c746183aa626173655f65706f636808a565706f636809a36f70739181a9536c6f7456616c756582a46e6f646507a77061796c6f616481aa536861726564426c6f6286a66f666673657428a36c656e11aa67656e65726174696f6e02a565706f636805a8636865636b73756dce3ade68b1a76261636b656e64a472646d61",
       "expect": {
         "rejected": true,
+        "rejection_kind": "unknown_token",
+        "rejection_is_decode_error": true,
         "error_names_token": "rdma"
+      }
+    },
+    {
+      "id": "backend_non_string_json",
+      "name": "backend_non_string_json",
+      "codec": "json",
+      "backend_form": "non_string",
+      "outcome": "reject",
+      "variant": "Delta",
+      "description": "The same refusal, reached through a door the clause does not describe. The clause is written entirely about TOKENS, so a runtime whose reader coerces rather than throws on a number in a string position normalizes silently here while passing every token scenario. One binding's only real defect under v1 was exactly this. The refusal MUST also arrive through the codec's documented decode-error family \u2014 `rejection_is_decode_error`, asserted on both reject forms \u2014 because a refusal raised outside the family every caller already guards a decode with fails PAST the handler: the frame is still refused and the peer still never sees the error. No token is named, because there is no token.",
+      "wire_json": "{\"Delta\": {\"base_epoch\": 8, \"epoch\": 9, \"ops\": [{\"SlotValue\": {\"node\": 7, \"payload\": {\"SharedBlob\": {\"offset\": 40, \"len\": 17, \"generation\": 2, \"epoch\": 5, \"checksum\": 987654321, \"backend\": 7}}}}]}}",
+      "expect": {
+        "rejected": true,
+        "rejection_kind": "non_string",
+        "rejection_is_decode_error": true
+      }
+    },
+    {
+      "id": "backend_non_string_msgpack",
+      "name": "backend_non_string_msgpack",
+      "codec": "msgpack",
+      "backend_form": "non_string",
+      "outcome": "reject",
+      "variant": "Delta",
+      "description": "The same refusal, reached through a door the clause does not describe. The clause is written entirely about TOKENS, so a runtime whose reader coerces rather than throws on a number in a string position normalizes silently here while passing every token scenario. One binding's only real defect under v1 was exactly this. The refusal MUST also arrive through the codec's documented decode-error family \u2014 `rejection_is_decode_error`, asserted on both reject forms \u2014 because a refusal raised outside the family every caller already guards a decode with fails PAST the handler: the frame is still refused and the peer still never sees the error. No token is named, because there is no token.",
+      "wire_msgpack_hex": "81a544656c746183aa626173655f65706f636808a565706f636809a36f70739181a9536c6f7456616c756582a46e6f646507a77061796c6f616481aa536861726564426c6f6286a66f666673657428a36c656e11aa67656e65726174696f6e02a565706f636805a8636865636b73756dce3ade68b1a76261636b656e6407",
+      "expect": {
+        "rejected": true,
+        "rejection_kind": "non_string",
+        "rejection_is_decode_error": true
       }
     }
   ]
