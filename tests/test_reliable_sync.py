@@ -167,15 +167,24 @@ def test_multi_epoch_delta() -> None:
 
     sc = _scenario(fx, "span_3_applies_equal_to_unit_fold")
     wire = sc["delta"]
-    base = wire["base_epoch"]
-    epoch = wire["epoch"]
+
+    # Decode FIRST, and assert the fixture-level block against the DECODED
+    # frame. These five keys used to be read straight out of `sc["delta"]` —
+    # `assertions.epoch` compared to `scenarios[...].delta.epoch`, the fixture
+    # against itself — so a runner that never built an `IpcMessage` satisfied
+    # all of them, which is the self-comparison shape `#lznullformblind` sweeps
+    # for.
+    delta = _msg({"Delta": wire})
+    body = delta.delta
+    assert body is not None, "the fixture declares the Delta variant"
+    base = body.base_epoch
+    epoch = body.epoch
     assert_key(a, "base_epoch", base)
     assert_key(a, "epoch", epoch)
     assert_key(a, "span", epoch - base)
     assert_key(a, "is_multi_epoch", epoch > base + 1)
-    assert_key(a, "op_count", len(wire["ops"]))
+    assert_key(a, "op_count", len(body.ops))
 
-    delta = _msg({"Delta": wire})
     coord = ResyncCoordinator(sc["receiver_last_epoch"])
     state: dict[str, list[int]] = {}
     result = coord.ingest(delta)

@@ -88,7 +88,13 @@ def _assert_fixture_block(fixture: dict, codec: str, byte_canonical: bool) -> No
         "role",
         "reference" if codec == "json" else "cross_language_binary_default",
     )
-    assert_key(block, "scenario_count", len(fixture["scenarios"]))
+    # `scenario_count` is NOT asserted here. It is the one key in this block
+    # that describes the RUN rather than the codec, and `len(fixture["scenarios"])`
+    # is the fixture compared to itself — green over a runner that decodes
+    # nothing, which is the exact vacuity `anti_vacuity` exists to name. It is
+    # asserted after the replay instead, against the scenarios really replayed
+    # (`#lznullformblind`; the same shape was fixed in the nodeid and nodekey
+    # runners under `#lzprosekeyconvention` and missed here).
 
     # `note` is a DECLARED prose key here (#lzprosekeyconvention), not
     # narration. The two fixtures state DIFFERENT obligations under that one
@@ -233,12 +239,15 @@ def _replay(
     encode: Callable[[IpcMessage], Any],
     decode: Callable[[Any], IpcMessage],
     encoding_check: Callable[[TrackedBlock, str, Any], None] | None = None,
-) -> None:
+) -> int:
     """Decode → RE-ENCODE → decode, asserting only against the second decode.
 
     One shape serves both codecs because the two fixtures carry identical
     ``wire`` values on purpose; the codec-specific part is the encode/decode
     pair and, for msgpack, the encoding introspection.
+
+    Returns the number of scenarios really replayed, so ``scenario_count`` is
+    compared against the run rather than against the fixture's own length.
     """
     replayed = 0
     for scenario in scenarios(fixture, name=name):
@@ -267,17 +276,32 @@ def _replay(
         replayed += 1
 
     assert replayed == 3, "one scenario per IpcMessage variant"
+    return replayed
+
+
+def _assert_scenario_count(fixture: dict, replayed: int) -> None:
+    """Pin ``scenario_count`` against the scenarios this run really replayed.
+
+    Not against ``len(fixture["scenarios"])``: that is the fixture compared to
+    itself, and it stays green over a runner that opens the file, counts the
+    list and decodes nothing — the vacuity the sibling nodeid and nodekey
+    runners already closed. A runner that stops replaying a variant now reddens
+    here (`#lznullformblind`).
+    """
+    block: TrackedBlock = fixture["assertions"]
+    assert_key(block, "scenario_count", replayed)
 
 
 def test_json_frames_round_trip() -> None:
     fixture = _load(_JSON_FIXTURE)
     _assert_fixture_block(fixture, "json", byte_canonical=True)
-    _replay(
+    replayed = _replay(
         fixture,
         _JSON_FIXTURE,
         IpcMessage.encode_json,
         IpcMessage.decode_json,
     )
+    _assert_scenario_count(fixture, replayed)
     verify_prose(fixture)
 
 
@@ -291,11 +315,12 @@ def test_msgpack_frames_round_trip() -> None:
     """
     fixture = _load(_MSGPACK_FIXTURE)
     _assert_fixture_block(fixture, "msgpack", byte_canonical=False)
-    _replay(
+    replayed = _replay(
         fixture,
         _MSGPACK_FIXTURE,
         IpcMessage.encode_msgpack,
         IpcMessage.decode_msgpack,
         _assert_msgpack_encoding,
     )
+    _assert_scenario_count(fixture, replayed)
     verify_prose(fixture)
