@@ -121,10 +121,13 @@ def test_nodekey_null_leniency_conformance() -> None:
     prose_key(
         block,
         "wire_encoding",
-        # "a pre-parsed object cannot express the difference between the two":
-        # the three wire forms are compared against the forms really replayed,
-        # and each one's decoded key is asserted separately.
-        discharged_by=["key_forms", "decoded_key"],
+        # PROXY. "A pre-parsed object cannot express the difference between the
+        # two" is a claim about the corpus's carriage, not about this run. The
+        # closest executable evidence that the distinction survived: the three
+        # wire forms are compared against the forms really replayed, under both
+        # codecs, and each form's decoded key is asserted separately — so a
+        # runner that lost the omitted/null distinction reddens.
+        discharged_by=["key_forms", "decoded_key", "codecs"],
     )
     prose_key(
         block,

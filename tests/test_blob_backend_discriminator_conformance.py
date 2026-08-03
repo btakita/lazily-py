@@ -247,12 +247,16 @@ def test_blob_backend_discriminator_conformance() -> None:
     prose_key(
         block,
         "wire_encoding",
-        # The obligation is that the exact wire shape survives into the runner:
+        # PROXY. The obligation is a claim about how the CORPUS carries its
+        # bytes — raw text and hex rather than a pre-parsed object — which no
+        # assertion a run makes can observe directly. The closest executable
+        # evidence is that the distinction survived into the runner:
         # `rejection_kind` is classified FROM the raw wire by
         # _observed_rejection_kind, and `backend_forms` is compared against the
-        # forms actually replayed, so a runner reading a pre-parsed body fails
-        # both.
-        discharged_by=["backend_forms", "rejection_kind"],
+        # forms actually replayed, so a runner reading a pre-parsed body (which
+        # could not carry the reject frames at all — they are schema-invalid by
+        # design) fails both.
+        discharged_by=["backend_forms", "rejection_kind", "codecs"],
     )
     prose_key(
         block,
@@ -307,9 +311,11 @@ def test_blob_backend_discriminator_conformance() -> None:
     prose_key(
         block,
         "theorem",
-        # resolve_wrong_backend: normalizing an unknown kind ROUTES rather than
-        # refuses. `rejected` is the refusal, `decoded_backend` is the
-        # non-flattening of the known kinds.
+        # PROXY. `resolve_wrong_backend` is a Lean theorem in lazily-formal; a
+        # run can only prove its CONSEQUENCE. That consequence is exactly the
+        # refusal — normalizing an unknown kind routes rather than refuses — so
+        # `rejected` carries it, with `decoded_backend` proving the known kinds
+        # are not flattened into one table either.
         discharged_by=["rejected", "decoded_backend"],
     )
     # NOT prose: a path this runner has nothing to compare against.

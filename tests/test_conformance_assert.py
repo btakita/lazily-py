@@ -384,6 +384,21 @@ def test_rule_7_a_discharge_naming_another_prose_key_fails() -> None:
     reset(fixture=_PROSE_FIXTURE)
 
 
+def test_rule_7_forbids_a_discharge_naming_prose_itself() -> None:
+    """`prose` never self-lists, so the prose-name set must be SEEDED with it.
+
+    Without the seed this is the one discharge that satisfies every other rule:
+    rule 7 does not see `prose` in `assertions.prose`, and rule 4's own
+    comparison marks `prose` asserted, so rule 6 waves it through. A paragraph
+    discharged by the declaration that it is a paragraph proves nothing.
+    """
+    block = _prose_block()
+    with pytest.raises(AssertionError, match="is itself prose"):
+        prose_key(block, "clause", discharged_by=["prose"])
+
+    reset(fixture=_PROSE_FIXTURE)
+
+
 def test_a_run_that_never_verifies_is_reported() -> None:
     """An unverified discharge claim is as unchecked as an unconsumed key."""
     block = _prose_block()
@@ -460,6 +475,72 @@ def test_an_undeclared_step_note_stays_exempt_by_name() -> None:
     ]
 
     reset(fixture="selftest/step_note.json")
+
+
+def test_the_declaration_is_applied_before_the_by_name_exemption() -> None:
+    """The hole two of the nine fell into, checked from the guard's own side.
+
+    A tracker that subtracts its reserved-name set BEFORE consulting
+    `assertions.prose` makes the declaration invisible — the key is exempt from
+    the unread guard, exempt from the unasserted guard, and never discharged, so
+    both `frame_roundtrip_*` fixtures skip the convention entirely while the
+    binding still reports conforming. Every ordering must give the same answer,
+    so the exemption is a set DIFFERENCE against the declaration rather than a
+    sequence of updates.
+    """
+    for prose_hint in ((), ("note",), ("note", "description")):
+        block = tracked(
+            {
+                "prose": ["note"],
+                "note": "`role` and `byte_canonical` are different senses",
+                "role": "reference",
+            },
+            fixture=_PROSE_FIXTURE,
+            prose=prose_hint,
+        )
+        assert_key(block, "role", "reference")
+        # Declared, therefore NOT waved through by the `note` blanket...
+        assert block.unconsumed() == ["note", "prose"]
+        # ...and not satisfiable as an annotation either.
+        with pytest.raises(AssertionError, match="free-text excuse for a key"):
+            excuse_key(block, "note", "narration")
+        reset(fixture=_PROSE_FIXTURE)
+
+
+def test_a_second_test_does_not_inherit_the_first_ones_assertions() -> None:
+    """A "run" is one test, not one process.
+
+    Unioning asserted keys across tests would let a discharge in one test be
+    satisfied by an assertion in another — the accident of collocation the
+    fixture-scoped ledger exists to bound. The session-wide consumption rungs
+    are unaffected: they ask whether ANYTHING checked a key, and still say yes.
+    """
+    first = _prose_block()
+    prose_key(first, "clause", discharged_by=["node_id_decimal"])
+    assert_key(first, "node_id_decimal", "9007199254740993")
+    verify_prose(_PROSE_FIXTURE)
+
+    # A second run of the same fixture that discharges but never asserts.
+    second = _prose_block()
+    prose_key(second, "clause", discharged_by=["node_id_decimal"])
+    with pytest.raises(AssertionError, match="never ASSERTED"):
+        verify_prose(_PROSE_FIXTURE)
+
+    reset(fixture=_PROSE_FIXTURE)
+
+
+def test_a_second_run_must_verify_again() -> None:
+    """Re-binding the block re-arms the net; one verification is not forever."""
+    first = _prose_block()
+    prose_key(first, "clause", discharged_by=["node_id_decimal"])
+    assert_key(first, "node_id_decimal", "9007199254740993")
+    verify_prose(_PROSE_FIXTURE)
+    assert not [line for line in prose_failures() if line.startswith(_PROSE_FIXTURE)]
+
+    _prose_block()  # a fresh load, i.e. a fresh run
+    assert [line for line in prose_failures() if line.startswith(_PROSE_FIXTURE)]
+
+    reset(fixture=_PROSE_FIXTURE)
 
 
 def test_verify_prose_needs_a_named_fixture() -> None:

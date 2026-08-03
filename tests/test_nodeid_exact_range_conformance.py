@@ -91,9 +91,12 @@ def test_nodeid_exact_range_conformance() -> None:
     prose_key(
         block,
         "wire_encoding",
-        # "MUST compare the decoded identifier by its decimal rendering" — for
-        # the node and for the root, both of which carry the boundary value.
-        discharged_by=["node_id_decimal", "root_id_decimal"],
+        # PROXY for the corpus half ("carried as raw text / hex, never a JSON
+        # number"), which no assertion a run makes can observe. The half a run
+        # CAN observe is the obligation it places on the runner — "MUST compare
+        # the decoded identifier by its decimal rendering" — for the node and
+        # for the root, both of which carry the boundary value.
+        discharged_by=["node_id_decimal", "root_id_decimal", "codecs"],
     )
     prose_key(
         block,

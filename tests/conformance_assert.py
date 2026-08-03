@@ -94,23 +94,52 @@ tracker fails the run when:
 5. a discharge names no keys;
 6. a discharge names a key this fixture's run did not assert — the rule that
    makes the excuse falsifiable at all;
-7. a discharge names a key that is itself prose.
+7. a discharge names a key that is itself prose, **or names ``prose``**. The
+   second half is not redundant: the declaration never self-lists, so without
+   it rule 7 misses ``discharged_by=["prose"]`` — and rule 4's own comparison
+   marks ``prose`` asserted, so rule 6 would then wave it through.
 
-The ledger is FIXTURE-scoped, not block-scoped: ``epoch_disambiguation`` sits in
-``assertions`` and is discharged by ``expect.frame_epoch`` / ``expect.blob_epoch``,
-asserted long after the ``assertions`` block is finished. So a named key matches
-by NAME in any block of that fixture, and the verdict lands when the fixture's
-replay is done — :func:`verify_prose`. A run that never verifies fails from
-``conftest.pytest_sessionfinish``: an unverified discharge claim is exactly as
-unchecked as an unconsumed key.
+Which rules are block-local and which are fixture-wide
+------------------------------------------------------
+The declaration is BLOCK-local: each block owns its own ``prose`` array, and
+rules 3 and 4 compare a block's discharged set against that block's array. Only
+the NAME MATCHING of rules 6 and 7 is fixture-wide, because that is the half
+that has to reach a per-scenario ``expect`` key — ``epoch_disambiguation`` sits
+in ``assertions`` and is discharged by ``expect.frame_epoch`` /
+``expect.blob_epoch``, asserted long after the ``assertions`` block is finished.
+
+And a RUN is one test, not one process. Rungs 2 and 3 aggregate over the whole
+session on purpose ("did anything in this suite check that key"); rule 6 asks
+the narrower question, so :data:`_RUN_ASSERTED` is cleared at each
+:func:`verify_prose`. Unioning asserted keys across tests would let a discharge
+in one test be satisfied by an assertion in another — the same accident of
+collocation the fixture-scoped ledger exists to bound.
+
+The verdict lands at :func:`verify_prose`, and a run that never verifies fails
+from ``conftest.pytest_sessionfinish``: an unverified discharge claim is exactly
+as unchecked as an unconsumed key. That seam already owns the block's
+consumption check and is structurally guaranteed to run last, which is why the
+net is armed there rather than from a teardown registered by the first
+``prose_key`` call — cleanup runs in reverse registration order, so such a net
+would fire BEFORE a verification registered earlier in the same body and report
+a false failure.
+
+A discharge may name a key that carries the obligation only by PROXY, and two
+in the corpus must: ``wire_encoding`` is a claim about how the corpus carries
+its bytes, which no assertion a *run* makes can observe, and ``theorem`` names
+a Lean theorem in lazily-formal. Naming the closest executable keys is
+conforming; naming a key with nothing to do with the obligation is not, and no
+tracker can tell the two apart. That judgement stays with review, which is why
+the discharge is written at the call site and says there that it is a proxy.
 
 ``note`` / ``description`` / ``reason`` inside a per-step or per-scenario block
 stay exempt BY NAME (:data:`PROSE_KEYS`) — the ~97 step notes in the
 reactive-graph corpus are annotations, not obligations. That exemption stops at
-the block's own declaration: a key listed in ``assertions.prose`` is NOT
-satisfied by the blanket, even when it is spelled ``note``, which is how
-``frame_roundtrip_json.json``'s top-level ``note`` — a real obligation about
-``role`` vs ``byte_canonical`` — gets discharged rather than waved through.
+the block's own declaration, applied FIRST: a key listed in ``assertions.prose``
+is NOT satisfied by the blanket, even when it is spelled ``note``. See
+:meth:`_Ledger.blanket_exempt` — this is the hole two of the nine bindings fell
+into, and it silently voids the convention for both ``frame_roundtrip``
+fixtures.
 
 Scenario was never replayed (#lzscenariocoverage)
 -------------------------------------------------
@@ -215,6 +244,7 @@ class _Ledger:
         "block",
         "declared_prose",
         "discharged",
+        "discharged_ever",
         "excused",
         "fixture",
         "keys",
@@ -232,17 +262,35 @@ class _Ledger:
         self.prose: set[str] = set()
         #: Keys this block's own ``prose`` array declares as obligations.
         self.declared_prose: set[str] = set()
-        #: Declared prose key -> the executable keys named as discharging it.
+        #: THIS RUN's claims: declared prose key -> the executable keys named as
+        #: discharging it. Cleared at each :func:`verify_prose`, because a "run"
+        #: is one test, not one process.
         self.discharged: dict[str, tuple[str, ...]] = {}
+        #: Every prose key discharged by ANY run, for the session-wide
+        #: consumption rungs. Those aggregate per ``(fixture, block)`` across the
+        #: whole session by design — a fixture loaded by two tests asks "did
+        #: ANYTHING check this key" — so they must not be reset by a per-run
+        #: clear.
+        self.discharged_ever: set[str] = set()
 
     def blanket_exempt(self) -> set[str]:
         """Names waved through as annotation, minus anything the block DECLARED.
 
-        The by-name exemption is only safe while the key annotates. A key the
-        corpus lists in ``assertions.prose`` states an obligation, so the blanket
-        must not reach it even when it is spelled ``note`` — otherwise the
-        reserved name becomes a place no runner can be made to discharge
-        anything, which is the hazard the convention names explicitly.
+        THE DECLARATION IS APPLIED FIRST, and this subtraction is where. The
+        by-name exemption is only safe while the key annotates; a key the corpus
+        lists in ``assertions.prose`` states an obligation. A tracker that
+        subtracts its reserved-name set BEFORE consulting the declaration makes
+        that declaration invisible — the key is exempt from the unread guard,
+        exempt from the unasserted guard, and never discharged, so the fixture
+        skips the whole convention while the binding still reports conforming.
+        Both ``frame_roundtrip_json.json`` and ``frame_roundtrip_msgpack.json``
+        declare ``note`` prose, and two of the nine bindings hit this
+        independently.
+
+        Expressing it as a lazily-evaluated set DIFFERENCE rather than as an
+        order of updates is deliberate: there is no sequence of calls that can
+        get it backwards, because the declaration is never subtracted from — it
+        is always what does the subtracting.
         """
         return self.prose - self.declared_prose
 
@@ -255,7 +303,7 @@ class _Ledger:
             self.asserted
             | set(self.excused)
             | self.blanket_exempt()
-            | set(self.discharged)
+            | self.discharged_ever
         )
         return sorted((self.keys & self.seen) - satisfied)
 
@@ -302,7 +350,11 @@ class TrackedBlock(Mapping[str, Any]):
             names = [name for name in declared if isinstance(name, str)]
             ledger.declared_prose.update(names)
             if names:
-                _PROSE_VERIFIED.setdefault(fixture, False)
+                # Re-ARM, not setdefault. Binding the block again is a fresh run
+                # of it, and a run that does not verify has an unchecked claim
+                # even when an earlier test's run of the same fixture did verify
+                # — "a run is one test, not one process".
+                _PROSE_VERIFIED[fixture] = False
         self._ledger = ledger
 
     # -- Mapping protocol; every path marks consumption ---------------------
@@ -349,6 +401,7 @@ class TrackedBlock(Mapping[str, Any]):
         self._refuse_asserting_prose(sorted(self._data), "whole-block equality")
         self._ledger.seen.update(self._data)
         self._ledger.asserted.update(self._data)
+        _RUN_ASSERTED.setdefault(self.fixture, set()).update(self._data)
         if isinstance(other, TrackedBlock):
             return self._data == other._data
         return self._data == other
@@ -388,6 +441,7 @@ class TrackedBlock(Mapping[str, Any]):
         self._refuse_asserting_prose((key,), f"assert_key({key!r})")
         value = self[key]  # marks read
         self._ledger.asserted.add(key)
+        _RUN_ASSERTED.setdefault(self.fixture, set()).add(key)
         return value
 
     def mark_excused(self, key: str, reason: str) -> None:
@@ -520,6 +574,16 @@ def excuse_key(block: TrackedBlock, key: str, reason: str) -> None:
 #: register anything.
 _PROSE_VERIFIED: dict[str, bool] = {}
 
+#: fixture -> key names asserted since that fixture was last verified.
+#:
+#: SEPARATE from ``_Ledger.asserted``, which aggregates over the whole session on
+#: purpose (rungs 2 and 3 ask "did ANYTHING in this suite check that key"). Rule
+#: 6 asks a narrower question — did THIS RUN assert what its discharge names —
+#: and a run is one test, not one process. Unioning across tests would let a
+#: discharge in one test be satisfied by an assertion in another, which is the
+#: same accident of collocation the fixture-scoped ledger exists to bound.
+_RUN_ASSERTED: dict[str, set[str]] = {}
+
 
 def _fixture_ledgers(fixture: str) -> list[_Ledger]:
     return [ledger for (name, _), ledger in _LEDGERS.items() if name == fixture]
@@ -533,17 +597,19 @@ def _fixture_declared_prose(fixture: str) -> set[str]:
 
 
 def _fixture_asserted(fixture: str) -> set[str]:
-    """Every key name this fixture's run compared against the fixture's value.
+    """Key names THIS RUN compared against the fixture's value.
 
-    Fixture-scoped on purpose: ``epoch_disambiguation`` lives in ``assertions``
-    and is discharged by ``expect.frame_epoch`` / ``expect.blob_epoch``, which
-    are asserted long after that block is finished. Matching is therefore by key
-    NAME in any block of the fixture.
+    Fixture-WIDE across blocks, because that is the half rule 6 needs to reach a
+    per-scenario ``expect`` key: ``epoch_disambiguation`` lives in ``assertions``
+    and is discharged by ``expect.frame_epoch`` / ``expect.blob_epoch``, asserted
+    long after that block is finished. Matching is therefore by key NAME in any
+    block of the fixture.
+
+    RUN-scoped in time, though — not session-scoped. The set is cleared at each
+    :func:`verify_prose`, so a discharge claimed by one test can only be
+    satisfied by an assertion that test made.
     """
-    asserted: set[str] = set()
-    for ledger in _fixture_ledgers(fixture):
-        asserted |= ledger.asserted
-    return asserted
+    return set(_RUN_ASSERTED.get(fixture, set()))
 
 
 def prose_key(
@@ -593,10 +659,14 @@ def prose_key(
             f"excuse again with the text removed — it makes no claim the tracker "
             f"can check (#lzprosekeyconvention)"
         )
-    declared = _fixture_declared_prose(block.fixture)
-    prose_named = sorted(
-        name for name in names if name in declared or name == PROSE_DECLARATION_KEY
-    )
+    # SEEDED WITH `prose` ITSELF. The declaration never self-lists, so without
+    # the seed rule 7 misses `discharged_by=["prose"]` — and rule 4's own
+    # comparison marks `prose` asserted, so rule 6 would then wave it through. A
+    # paragraph discharged by the declaration that it is a paragraph proves
+    # nothing. Fixture-wide, because rule 7's name matching is the half that has
+    # to reach a per-scenario block.
+    declared = _fixture_declared_prose(block.fixture) | {PROSE_DECLARATION_KEY}
+    prose_named = sorted(name for name in names if name in declared)
     if prose_named:
         raise AssertionError(
             f"{block.fixture} [{block.block}]: prose_key({key!r}) is discharged by "
@@ -607,7 +677,8 @@ def prose_key(
         )
     ledger.seen.add(key)
     ledger.discharged[key] = names
-    _PROSE_VERIFIED.setdefault(block.fixture, False)
+    ledger.discharged_ever.add(key)
+    _PROSE_VERIFIED[block.fixture] = False
     return names
 
 
@@ -624,7 +695,17 @@ def verify_prose(fixture: Any) -> None:
 
     Call it at the end of the runner that replays the fixture. A fixture that
     declares prose and is never verified is reported by
-    ``conftest.pytest_sessionfinish``, exactly as an unconsumed key is.
+    ``conftest.pytest_sessionfinish``, exactly as an unconsumed key is — the
+    seam that already owns the block's consumption check, and therefore the one
+    place structurally guaranteed to run last. Arming from a per-test teardown
+    registered by the first ``prose_key`` call would be a LIFO hazard: cleanup
+    runs in reverse registration order, so such a net fires BEFORE a
+    verification registered earlier in the same body and reports a false
+    failure.
+
+    A "run" is one test, not one process: this clears the run's claims and its
+    asserted set on the way out, so a fixture replayed by a second test starts
+    from nothing rather than inheriting the first test's assertions.
     """
     name = (
         fixture
@@ -668,6 +749,12 @@ def verify_prose(fixture: Any) -> None:
                     f"nothing"
                 )
     _PROSE_VERIFIED[name] = True
+    # Clear the RUN, not the session. `discharged_ever` and `_Ledger.asserted`
+    # survive for the session-wide consumption rungs; the per-run claims and the
+    # per-run asserted set do not.
+    for ledger in _fixture_ledgers(name):
+        ledger.discharged.clear()
+    _RUN_ASSERTED.pop(name, None)
     if problems:
         raise AssertionError(
             f"{name}: prose discharge verification failed "
@@ -785,6 +872,7 @@ def reset(fixture: str | None = None) -> None:
         _LEDGERS.clear()
         _REPLAYED.clear()
         _PROSE_VERIFIED.clear()
+        _RUN_ASSERTED.clear()
         _SCENARIO_EXCUSES.clear()
         _seed_scenario_excuses()
         return
@@ -792,6 +880,7 @@ def reset(fixture: str | None = None) -> None:
         del _LEDGERS[key]
     _REPLAYED.pop(fixture, None)
     _PROSE_VERIFIED.pop(fixture, None)
+    _RUN_ASSERTED.pop(fixture, None)
     _SCENARIO_EXCUSES.pop(fixture, None)
     if fixture in SCENARIO_EXCUSES:
         for scenario, reason in SCENARIO_EXCUSES[fixture].items():
