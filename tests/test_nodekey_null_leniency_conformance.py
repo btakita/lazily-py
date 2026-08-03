@@ -40,6 +40,7 @@ from conformance_assert import (
     assert_key,
     assert_key_with,
     excuse_key,
+    fnv1a64_hex,
     instrument,
     prose_key,
     scenarios,
@@ -78,14 +79,16 @@ def _load() -> dict:
     return fixture
 
 
-def _decode(scenario) -> IpcMessage:
+def _decode(scenario, expect: TrackedBlock) -> IpcMessage:
     codec = scenario["codec"]
     if codec == "json":
-        return IpcMessage.from_wire(json.loads(scenario["wire_json"]))
+        wire_input = scenario["wire_json"].encode()
+        assert_key(expect, "wire_input_fnv1a64", fnv1a64_hex(wire_input))
+        return IpcMessage.decode_json(wire_input.decode())
     if codec == "msgpack":
-        return IpcMessage.from_wire(
-            msgpack_unpack(bytes.fromhex(scenario["wire_msgpack_hex"]))
-        )
+        wire_input = bytes.fromhex(scenario["wire_msgpack_hex"])
+        assert_key(expect, "wire_input_fnv1a64", fnv1a64_hex(wire_input))
+        return IpcMessage.decode_msgpack(wire_input)
     raise AssertionError(f"unknown codec {codec!r}")
 
 
@@ -240,17 +243,7 @@ def test_nodekey_null_leniency_conformance() -> None:
     prose_key(
         block,
         "wire_encoding",
-        # PROXY. "A pre-parsed object cannot express the difference between the
-        # two" is a claim about the corpus's carriage, not about this run. It is
-        # now discharged by the RAW-WIRE CONTROL rather than by a tally of the
-        # fixture's own labels: `key_forms` is satisfied only by the three forms
-        # `_wire_key_form` read out of each scenario's own bytes — an absent map
-        # entry, a JSON `null` / msgpack nil, a string — before any decoder
-        # touched them. A runner that re-serialized a pre-parsed object, or a
-        # decoder that collapses `null` onto `omitted` on contact, cannot satisfy
-        # it. `decoded_key` is the second half: what each classified form decodes
-        # to.
-        discharged_by=["key_forms", "decoded_key"],
+        discharged_by=["wire_input_fnv1a64"],
     )
     prose_key(
         block,
@@ -309,7 +302,7 @@ def test_nodekey_null_leniency_conformance() -> None:
         )
         observed_key_forms.add(on_wire)
 
-        message = _decode(scenario)
+        message = _decode(scenario, expect)
         key = _decoded_key(scenario, message)
         if key is not None:
             keys_decoded += 1

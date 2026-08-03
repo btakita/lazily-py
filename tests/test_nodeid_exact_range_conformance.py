@@ -30,6 +30,7 @@ from conformance_assert import (
     assert_key_set,
     assert_key_with,
     excuse_key,
+    fnv1a64_hex,
     instrument,
     prose_key,
     scenarios,
@@ -37,7 +38,6 @@ from conformance_assert import (
 )
 
 from lazily.ipc import IpcMessage, NodeState_Payload
-from lazily.msgpack_codec import msgpack_unpack
 
 
 _LOCAL_FIXTURES = Path(__file__).resolve().parent / "conformance"
@@ -55,7 +55,7 @@ def _load() -> dict:
     return fixture
 
 
-def _decode(scenario) -> IpcMessage:
+def _decode(scenario, expect: TrackedBlock) -> IpcMessage:
     """Decode a scenario's wire frame with the codec it names.
 
     lazily-py never refuses, so this returns a message rather than a
@@ -64,11 +64,13 @@ def _decode(scenario) -> IpcMessage:
     """
     codec = scenario["codec"]
     if codec == "json":
-        return IpcMessage.from_wire(json.loads(scenario["wire_json"]))
+        wire_input = scenario["wire_json"].encode()
+        assert_key(expect, "wire_input_fnv1a64", fnv1a64_hex(wire_input))
+        return IpcMessage.decode_json(wire_input.decode())
     if codec == "msgpack":
-        return IpcMessage.from_wire(
-            msgpack_unpack(bytes.fromhex(scenario["wire_msgpack_hex"]))
-        )
+        wire_input = bytes.fromhex(scenario["wire_msgpack_hex"])
+        assert_key(expect, "wire_input_fnv1a64", fnv1a64_hex(wire_input))
+        return IpcMessage.decode_msgpack(wire_input)
     raise AssertionError(f"unknown codec {codec!r}")
 
 
@@ -92,12 +94,7 @@ def test_nodeid_exact_range_conformance() -> None:
     prose_key(
         block,
         "wire_encoding",
-        # PROXY for the corpus half ("carried as raw text / hex, never a JSON
-        # number"), which no assertion a run makes can observe. The half a run
-        # CAN observe is the obligation it places on the runner — "MUST compare
-        # the decoded identifier by its decimal rendering" — for the node and
-        # for the root, both of which carry the boundary value.
-        discharged_by=["node_id_decimal", "root_id_decimal", "codecs"],
+        discharged_by=["wire_input_fnv1a64"],
     )
     prose_key(
         block,
@@ -142,7 +139,7 @@ def test_nodeid_exact_range_conformance() -> None:
         )
         observed_codecs.add(scenario["codec"])
 
-        message = _decode(scenario)
+        message = _decode(scenario, expect)
         accepted += 1
 
         snapshot = message.snapshot

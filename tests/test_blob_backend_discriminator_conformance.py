@@ -69,6 +69,7 @@ from conformance_assert import (
     assert_key,
     assert_key_with,
     excuse_key,
+    fnv1a64_hex,
     instrument,
     prose_key,
     scenarios,
@@ -110,7 +111,19 @@ def _load() -> dict:
     return fixture
 
 
-def _wire(scenario) -> Any:
+def _wire_input(scenario, expect: TrackedBlock) -> bytes:
+    codec = scenario["codec"]
+    if codec == "json":
+        wire_input = scenario["wire_json"].encode()
+    elif codec == "msgpack":
+        wire_input = bytes.fromhex(scenario["wire_msgpack_hex"])
+    else:
+        raise AssertionError(f"unknown codec {codec!r}")
+    assert_key(expect, "wire_input_fnv1a64", fnv1a64_hex(wire_input))
+    return wire_input
+
+
+def _wire(scenario, wire_input: bytes) -> Any:
     """Materialise the scenario's wire tree from its RAW carried form.
 
     Never from a parsed scenario body: the reject and null frames carry a
@@ -119,9 +132,18 @@ def _wire(scenario) -> Any:
     """
     codec = scenario["codec"]
     if codec == "json":
-        return json.loads(scenario["wire_json"])
+        return json.loads(wire_input)
     if codec == "msgpack":
-        return msgpack_unpack(bytes.fromhex(scenario["wire_msgpack_hex"]))
+        return msgpack_unpack(wire_input)
+    raise AssertionError(f"unknown codec {codec!r}")
+
+
+def _decode(scenario, wire_input: bytes) -> IpcMessage:
+    codec = scenario["codec"]
+    if codec == "json":
+        return IpcMessage.decode_json(wire_input.decode())
+    if codec == "msgpack":
+        return IpcMessage.decode_msgpack(wire_input)
     raise AssertionError(f"unknown codec {codec!r}")
 
 
@@ -247,16 +269,7 @@ def test_blob_backend_discriminator_conformance() -> None:
     prose_key(
         block,
         "wire_encoding",
-        # PROXY. The obligation is a claim about how the CORPUS carries its
-        # bytes — raw text and hex rather than a pre-parsed object — which no
-        # assertion a run makes can observe directly. The closest executable
-        # evidence is that the distinction survived into the runner:
-        # `rejection_kind` is classified FROM the raw wire by
-        # _observed_rejection_kind, and `backend_forms` is compared against the
-        # forms actually replayed, so a runner reading a pre-parsed body (which
-        # could not carry the reject frames at all — they are schema-invalid by
-        # design) fails both.
-        discharged_by=["backend_forms", "rejection_kind", "codecs"],
+        discharged_by=["wire_input_fnv1a64"],
     )
     prose_key(
         block,
@@ -352,7 +365,8 @@ def test_blob_backend_discriminator_conformance() -> None:
         observed_outcomes.add(scenario["outcome"])
         observed_forms.add(form)
         forms_by_codec.setdefault(codec, set()).add(form)
-        wire = _wire(scenario)
+        wire_input = _wire_input(scenario, expect)
+        wire = _wire(scenario, wire_input)
 
         if scenario["outcome"] == "reject":
             # Caught as bare `Exception`, NOT as `pytest.raises(ValueError)`.
@@ -363,7 +377,7 @@ def test_blob_backend_discriminator_conformance() -> None:
             # names the real defect. The refusal has to be CLASSIFIED, not
             # assumed.
             try:
-                IpcMessage.from_wire(wire)
+                _decode(scenario, wire_input)
             except Exception as exc:
                 error: Exception = exc
             else:
@@ -411,7 +425,7 @@ def test_blob_backend_discriminator_conformance() -> None:
         assert scenario["outcome"] == "accept", (
             f"{scenario['id']}: unknown outcome {scenario['outcome']!r}"
         )
-        message = IpcMessage.from_wire(wire)
+        message = _decode(scenario, wire_input)
         accepted += 1
 
         delta, op, blob = _blob(message)

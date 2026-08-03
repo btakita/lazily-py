@@ -43,7 +43,7 @@
       "non_string"
     ],
     "scenario_count": 14,
-    "wire_encoding": "json scenarios carry `wire_json` as RAW TEXT and msgpack scenarios carry `wire_msgpack_hex` as lowercase hex, so the exact wire form under test \u2014 an ABSENT map entry versus a present short string \u2014 survives into the runner. The reject scenarios additionally CANNOT be carried as a parsed object: `schemas/defs.json` closes `backend` to an enum, so a fixture embedding `\"backend\": \"rdma\"` as structured JSON would fail the corpus's own schema gate. The enum binds a conforming ENCODER; these frames are what a decoder must survive, which is the same split `nodekey_null_leniency.json` makes.",
+    "wire_encoding": "json scenarios carry `wire_json` as RAW TEXT and msgpack scenarios carry `wire_msgpack_hex` as lowercase hex, so the exact wire form under test \u2014 an ABSENT map entry versus a present short string \u2014 survives into the runner. The reject scenarios additionally CANNOT be carried as a parsed object: `schemas/defs.json` closes `backend` to an enum, so a fixture embedding `\"backend\": \"rdma\"` as structured JSON would fail the corpus's own schema gate. The enum binds a conforming ENCODER; these frames are what a decoder must survive, which is the same split `nodekey_null_leniency.json` makes. A runner MUST compare `expect.wire_input_fnv1a64` against the exact bytes it hands to the decoder.",
     "backend_form_vocabulary": "The seven wire shapes `backend` can arrive in, each carried in both codecs. Four are TOKENS (`shm`, `arrow`, `in_process`, `rdma`) and three are not: `omitted` writes no map entry at all, `null` writes an explicit nil, and `non_string` writes an integer in the slot a token belongs in. A runner MUST check that every backend in `assertions.backends` appears as the `decoded_backend` of some accept scenario \u2014 that is the assertion which would have caught v1's missing `in_process`, and it cannot be derived from a scenario count.",
     "reject_obligation": "A rejecting binding MUST name the offending token in its error. The failure this pins is not 'the frame was refused' but 'the frame was refused for the stated reason': a decoder that rejects the descriptor because it mis-parsed `checksum` passes a bare is-error assertion while implementing none of the clause. `error_names_token` is the assertion that separates them.",
     "null_form": "An explicit `backend: null` is the ABSENT form, not a present-unknown one, and decodes as `shm` (protocol.md \u00a7 the `backend` discriminator, following \u00a7 NodeKey and `#lzkeynullstrict`). A serde-style peer that did not apply `skip_serializing_if` to an optional field emits `null` where a conforming encoder omits, so refusing it is stricter than the reference implementation on a frame the reference implementation produces. The null frames are therefore accept scenarios that are deliberately schema-INVALID: `schemas/defs.json` types `backend` as a string, which binds the ENCODER, and the decoder's leniency is a separate fact. Four bindings raised this edge independently while implementing v1 and had already split three ways on it \u2014 accept-as-`shm`, an ExpectedString error naming nothing, and a refusal naming the empty token \u2014 which is why it is a scenario rather than a sentence.",
@@ -64,6 +64,7 @@
       "description": "The forward-compatibility channel, and the only one. Every descriptor minted before `backend` existed has this shape, which is why the field is optional and why a decoder MUST read its absence as `shm`. This is also the control that forces a real decode.",
       "wire_json": "{\"Delta\": {\"base_epoch\": 8, \"epoch\": 9, \"ops\": [{\"SlotValue\": {\"node\": 7, \"payload\": {\"SharedBlob\": {\"offset\": 40, \"len\": 17, \"generation\": 2, \"epoch\": 5, \"checksum\": 987654321}}}}]}}",
       "expect": {
+        "wire_input_fnv1a64": "dfcbb6a102fe201a",
         "decoded_backend": "shm",
         "reencoded_backend_field_present": false,
         "node": 7,
@@ -85,6 +86,7 @@
       "description": "The forward-compatibility channel, and the only one. Every descriptor minted before `backend` existed has this shape, which is why the field is optional and why a decoder MUST read its absence as `shm`. This is also the control that forces a real decode.",
       "wire_msgpack_hex": "81a544656c746183aa626173655f65706f636808a565706f636809a36f70739181a9536c6f7456616c756582a46e6f646507a77061796c6f616481aa536861726564426c6f6285a66f666673657428a36c656e11aa67656e65726174696f6e02a565706f636805a8636865636b73756dce3ade68b1",
       "expect": {
+        "wire_input_fnv1a64": "d86e463e207f45aa",
         "decoded_backend": "shm",
         "reencoded_backend_field_present": false,
         "node": 7,
@@ -106,6 +108,7 @@
       "description": "The redundant-but-legal form. A conforming encoder OMITS `backend` when it is `shm`, so a decoder must accept this on the way in and must not emit it on the way out \u2014 `reencoded_backend_field_present` is false here and true for arrow, which is the encoder half of the clause.",
       "wire_json": "{\"Delta\": {\"base_epoch\": 8, \"epoch\": 9, \"ops\": [{\"SlotValue\": {\"node\": 7, \"payload\": {\"SharedBlob\": {\"offset\": 40, \"len\": 17, \"generation\": 2, \"epoch\": 5, \"checksum\": 987654321, \"backend\": \"shm\"}}}}]}}",
       "expect": {
+        "wire_input_fnv1a64": "7d8b9596c997bb52",
         "decoded_backend": "shm",
         "reencoded_backend_field_present": false,
         "node": 7,
@@ -127,6 +130,7 @@
       "description": "The redundant-but-legal form. A conforming encoder OMITS `backend` when it is `shm`, so a decoder must accept this on the way in and must not emit it on the way out \u2014 `reencoded_backend_field_present` is false here and true for arrow, which is the encoder half of the clause.",
       "wire_msgpack_hex": "81a544656c746183aa626173655f65706f636808a565706f636809a36f70739181a9536c6f7456616c756582a46e6f646507a77061796c6f616481aa536861726564426c6f6286a66f666673657428a36c656e11aa67656e65726174696f6e02a565706f636805a8636865636b73756dce3ade68b1a76261636b656e64a373686d",
       "expect": {
+        "wire_input_fnv1a64": "afa5c77c37251fd1",
         "decoded_backend": "shm",
         "reencoded_backend_field_present": false,
         "node": 7,
@@ -148,6 +152,7 @@
       "description": "A second real backend, so the leniency above cannot be implemented by ignoring the field outright. A decoder that hardcodes `shm` passes both scenarios above and fails here. It is also the scenario that proves the enum is genuinely multi-valued on the wire, which is what makes routing by `kind` (the resolve_wrong_backend theorem) meaningful at all.",
       "wire_json": "{\"Delta\": {\"base_epoch\": 8, \"epoch\": 9, \"ops\": [{\"SlotValue\": {\"node\": 7, \"payload\": {\"SharedBlob\": {\"offset\": 40, \"len\": 17, \"generation\": 2, \"epoch\": 5, \"checksum\": 987654321, \"backend\": \"arrow\"}}}}]}}",
       "expect": {
+        "wire_input_fnv1a64": "2ab796d48f3ea51d",
         "decoded_backend": "arrow",
         "reencoded_backend_field_present": true,
         "node": 7,
@@ -169,6 +174,7 @@
       "description": "A second real backend, so the leniency above cannot be implemented by ignoring the field outright. A decoder that hardcodes `shm` passes both scenarios above and fails here. It is also the scenario that proves the enum is genuinely multi-valued on the wire, which is what makes routing by `kind` (the resolve_wrong_backend theorem) meaningful at all.",
       "wire_msgpack_hex": "81a544656c746183aa626173655f65706f636808a565706f636809a36f70739181a9536c6f7456616c756582a46e6f646507a77061796c6f616481aa536861726564426c6f6286a66f666673657428a36c656e11aa67656e65726174696f6e02a565706f636805a8636865636b73756dce3ade68b1a76261636b656e64a56172726f77",
       "expect": {
+        "wire_input_fnv1a64": "be87db827d35c2c0",
         "decoded_backend": "arrow",
         "reencoded_backend_field_present": true,
         "node": 7,
@@ -190,6 +196,7 @@
       "description": "The THIRD declared backend, and the one v1 declared without carrying. A binding that knows only {shm, arrow} rejects this token \u2014 naming it, conformingly, by the letter of the clause \u2014 and passed every v1 scenario while implementing a smaller enum than the clause declares. Three bindings reported the hole independently while replaying v1. `arrow` proves the discriminator is READ; this proves the vocabulary is COMPLETE, and no count of scenarios substitutes for it.",
       "wire_json": "{\"Delta\": {\"base_epoch\": 8, \"epoch\": 9, \"ops\": [{\"SlotValue\": {\"node\": 7, \"payload\": {\"SharedBlob\": {\"offset\": 40, \"len\": 17, \"generation\": 2, \"epoch\": 5, \"checksum\": 987654321, \"backend\": \"in_process\"}}}}]}}",
       "expect": {
+        "wire_input_fnv1a64": "2d430426249004d3",
         "decoded_backend": "in_process",
         "reencoded_backend_field_present": true,
         "node": 7,
@@ -211,6 +218,7 @@
       "description": "The THIRD declared backend, and the one v1 declared without carrying. A binding that knows only {shm, arrow} rejects this token \u2014 naming it, conformingly, by the letter of the clause \u2014 and passed every v1 scenario while implementing a smaller enum than the clause declares. Three bindings reported the hole independently while replaying v1. `arrow` proves the discriminator is READ; this proves the vocabulary is COMPLETE, and no count of scenarios substitutes for it.",
       "wire_msgpack_hex": "81a544656c746183aa626173655f65706f636808a565706f636809a36f70739181a9536c6f7456616c756582a46e6f646507a77061796c6f616481aa536861726564426c6f6286a66f666673657428a36c656e11aa67656e65726174696f6e02a565706f636805a8636865636b73756dce3ade68b1a76261636b656e64aa696e5f70726f63657373",
       "expect": {
+        "wire_input_fnv1a64": "3eb460f1581f371b",
         "decoded_backend": "in_process",
         "reencoded_backend_field_present": true,
         "node": 7,
@@ -232,6 +240,7 @@
       "description": "An explicit null is the ABSENT form, not a present-unknown one, and decodes as `shm` \u2014 the \u00a7 NodeKey rule (`#lzkeynullstrict`), not the unknown-token rule, because a serde-style peer that skipped `skip_serializing_if` emits null where a conforming encoder omits. Refusing it would be stricter than the reference implementation on a frame the reference implementation produces. The encoder half still holds: the re-encoded frame carries no `backend` entry, so the null does not survive a round trip. This frame is deliberately schema-INVALID (see `assertions.null_form`) \u2014 the enum binds the encoder, and the decoder's leniency is the separate fact under test.",
       "wire_json": "{\"Delta\": {\"base_epoch\": 8, \"epoch\": 9, \"ops\": [{\"SlotValue\": {\"node\": 7, \"payload\": {\"SharedBlob\": {\"offset\": 40, \"len\": 17, \"generation\": 2, \"epoch\": 5, \"checksum\": 987654321, \"backend\": null}}}}]}}",
       "expect": {
+        "wire_input_fnv1a64": "10906c7bb002451d",
         "decoded_backend": "shm",
         "reencoded_backend_field_present": false,
         "node": 7,
@@ -253,6 +262,7 @@
       "description": "An explicit null is the ABSENT form, not a present-unknown one, and decodes as `shm` \u2014 the \u00a7 NodeKey rule (`#lzkeynullstrict`), not the unknown-token rule, because a serde-style peer that skipped `skip_serializing_if` emits null where a conforming encoder omits. Refusing it would be stricter than the reference implementation on a frame the reference implementation produces. The encoder half still holds: the re-encoded frame carries no `backend` entry, so the null does not survive a round trip. This frame is deliberately schema-INVALID (see `assertions.null_form`) \u2014 the enum binds the encoder, and the decoder's leniency is the separate fact under test.",
       "wire_msgpack_hex": "81a544656c746183aa626173655f65706f636808a565706f636809a36f70739181a9536c6f7456616c756582a46e6f646507a77061796c6f616481aa536861726564426c6f6286a66f666673657428a36c656e11aa67656e65726174696f6e02a565706f636805a8636865636b73756dce3ade68b1a76261636b656e64c0",
       "expect": {
+        "wire_input_fnv1a64": "f35b55b7e7ac16c4",
         "decoded_backend": "shm",
         "reencoded_backend_field_present": false,
         "node": 7,
@@ -274,6 +284,7 @@
       "description": "The clause. A present `backend` outside the enum MUST be refused, naming the token. Five of nine bindings normalized it to `shm` and documented the normalization as forward-compat; that is the case this scenario exists to make non-conforming. Normalizing routes a non-shm descriptor into the shm table, which is the exact misroute resolve_wrong_backend proves cannot happen \u2014 the lenient bindings were relying on the generation/epoch/checksum verification to produce, probabilistically and downstream, the outcome the routing rule guarantees structurally. Note also what the normalization costs on the OTHER side: `shm` is a real backend this build resolves, so a checksum collision returns bytes, whereas a refusal is a visible protocol error the peer recovers from by resync.",
       "wire_json": "{\"Delta\": {\"base_epoch\": 8, \"epoch\": 9, \"ops\": [{\"SlotValue\": {\"node\": 7, \"payload\": {\"SharedBlob\": {\"offset\": 40, \"len\": 17, \"generation\": 2, \"epoch\": 5, \"checksum\": 987654321, \"backend\": \"rdma\"}}}}]}}",
       "expect": {
+        "wire_input_fnv1a64": "15a81bbbc84d4d2a",
         "rejected": true,
         "rejection_kind": "unknown_token",
         "rejection_is_decode_error": true,
@@ -290,6 +301,7 @@
       "description": "The clause. A present `backend` outside the enum MUST be refused, naming the token. Five of nine bindings normalized it to `shm` and documented the normalization as forward-compat; that is the case this scenario exists to make non-conforming. Normalizing routes a non-shm descriptor into the shm table, which is the exact misroute resolve_wrong_backend proves cannot happen \u2014 the lenient bindings were relying on the generation/epoch/checksum verification to produce, probabilistically and downstream, the outcome the routing rule guarantees structurally. Note also what the normalization costs on the OTHER side: `shm` is a real backend this build resolves, so a checksum collision returns bytes, whereas a refusal is a visible protocol error the peer recovers from by resync.",
       "wire_msgpack_hex": "81a544656c746183aa626173655f65706f636808a565706f636809a36f70739181a9536c6f7456616c756582a46e6f646507a77061796c6f616481aa536861726564426c6f6286a66f666673657428a36c656e11aa67656e65726174696f6e02a565706f636805a8636865636b73756dce3ade68b1a76261636b656e64a472646d61",
       "expect": {
+        "wire_input_fnv1a64": "b20b67d8af226708",
         "rejected": true,
         "rejection_kind": "unknown_token",
         "rejection_is_decode_error": true,
@@ -306,6 +318,7 @@
       "description": "The same refusal, reached through a door the clause does not describe. The clause is written entirely about TOKENS, so a runtime whose reader coerces rather than throws on a number in a string position normalizes silently here while passing every token scenario. One binding's only real defect under v1 was exactly this. The refusal MUST also arrive through the codec's documented decode-error family \u2014 `rejection_is_decode_error`, asserted on both reject forms \u2014 because a refusal raised outside the family every caller already guards a decode with fails PAST the handler: the frame is still refused and the peer still never sees the error. No token is named, because there is no token.",
       "wire_json": "{\"Delta\": {\"base_epoch\": 8, \"epoch\": 9, \"ops\": [{\"SlotValue\": {\"node\": 7, \"payload\": {\"SharedBlob\": {\"offset\": 40, \"len\": 17, \"generation\": 2, \"epoch\": 5, \"checksum\": 987654321, \"backend\": 7}}}}]}}",
       "expect": {
+        "wire_input_fnv1a64": "6f932ecb840bedfb",
         "rejected": true,
         "rejection_kind": "non_string",
         "rejection_is_decode_error": true
@@ -321,6 +334,7 @@
       "description": "The same refusal, reached through a door the clause does not describe. The clause is written entirely about TOKENS, so a runtime whose reader coerces rather than throws on a number in a string position normalizes silently here while passing every token scenario. One binding's only real defect under v1 was exactly this. The refusal MUST also arrive through the codec's documented decode-error family \u2014 `rejection_is_decode_error`, asserted on both reject forms \u2014 because a refusal raised outside the family every caller already guards a decode with fails PAST the handler: the frame is still refused and the peer still never sees the error. No token is named, because there is no token.",
       "wire_msgpack_hex": "81a544656c746183aa626173655f65706f636808a565706f636809a36f70739181a9536c6f7456616c756582a46e6f646507a77061796c6f616481aa536861726564426c6f6286a66f666673657428a36c656e11aa67656e65726174696f6e02a565706f636805a8636865636b73756dce3ade68b1a76261636b656e6407",
       "expect": {
+        "wire_input_fnv1a64": "f35c14b7e7ad5b51",
         "rejected": true,
         "rejection_kind": "non_string",
         "rejection_is_decode_error": true

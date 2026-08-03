@@ -337,11 +337,21 @@ def block_digest(value: Mapping[str, Any]) -> str:
 def hash_fnv1a(text: str) -> int:
     """FNV-1a over UTF-8. Small, dependency-free, and stable across processes —
     unlike ``hash()``, which PYTHONHASHSEED randomises per run."""
+    return hash_fnv1a_bytes(text.encode("utf-8"))
+
+
+def hash_fnv1a_bytes(data: bytes) -> int:
+    """FNV-1a over exact bytes."""
     digest = 0xCBF29CE484222325
-    for byte in text.encode("utf-8"):
+    for byte in data:
         digest ^= byte
         digest = (digest * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
     return digest
+
+
+def fnv1a64_hex(data: bytes) -> str:
+    """FNV-1a over exact bytes as sixteen lowercase hexadecimal digits."""
+    return f"{hash_fnv1a_bytes(data):016x}"
 
 
 def record_declared_blocks(fixture: str, text: str) -> None:

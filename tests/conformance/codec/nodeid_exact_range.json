@@ -15,7 +15,7 @@
       "msgpack"
     ],
     "scenario_count": 6,
-    "wire_encoding": "json scenarios carry `wire_json` as RAW TEXT, msgpack scenarios carry `wire_msgpack_hex` as lowercase hex, and the expectation is `expect.node_id_decimal`, a decimal STRING. None of the three is a JSON number on purpose: this file is itself JSON, so a runner that loaded a bare 9007199254740993 through a double-backed JSON parser would round the fixture's own expected value to 9007199254740992 before the test could compare anything, and the test would pass against a decoder that rounds. A runner MUST parse `wire_json` with the codec under test, not re-serialize a pre-parsed object, and MUST compare the decoded identifier by its decimal rendering.",
+    "wire_encoding": "json scenarios carry `wire_json` as RAW TEXT, msgpack scenarios carry `wire_msgpack_hex` as lowercase hex, and the expectation is `expect.node_id_decimal`, a decimal STRING. None of the three is a JSON number on purpose: this file is itself JSON, so a runner that loaded a bare 9007199254740993 through a double-backed JSON parser would round the fixture's own expected value to 9007199254740992 before the test could compare anything, and the test would pass against a decoder that rounds. A runner MUST parse `wire_json` with the codec under test, not re-serialize a pre-parsed object, MUST compare `expect.wire_input_fnv1a64` against the exact bytes it hands to that decoder, and MUST compare the decoded identifier by its decimal rendering.",
     "outcomes": {
       "exact": "the decoder MUST accept the frame and yield exactly `node_id_decimal`",
       "exact_or_reject": "the decoder MUST either yield exactly `node_id_decimal` or fail the decode with an error; yielding any other value is the violation"
@@ -32,6 +32,7 @@
       "description": "2^53 - 1 \u2014 the largest identifier an IEEE-754 double holds exactly. Every binding, including the two whose identity type IS a double, MUST decode this to exactly 9007199254740991. This is the anti-vacuity control: a runner that reports 'rejected' for every frame satisfies the two `exact_or_reject` scenarios trivially and fails here.",
       "wire_json": "{\"Snapshot\": {\"epoch\": 1, \"nodes\": [{\"node\": 9007199254740991, \"type_tag\": \"i32\", \"state\": {\"Payload\": [1, 2, 3]}}], \"edges\": [], \"roots\": [9007199254740991]}}",
       "expect": {
+        "wire_input_fnv1a64": "ec8672bb65e82279",
         "outcome": "exact",
         "node_id_decimal": "9007199254740991",
         "root_id_decimal": "9007199254740991",
@@ -53,6 +54,7 @@
       "description": "2^53 - 1 \u2014 the largest identifier an IEEE-754 double holds exactly. Every binding, including the two whose identity type IS a double, MUST decode this to exactly 9007199254740991. This is the anti-vacuity control: a runner that reports 'rejected' for every frame satisfies the two `exact_or_reject` scenarios trivially and fails here.",
       "wire_msgpack_hex": "81a8536e617073686f7484a565706f636801a56e6f6465739183a46e6f6465cf001fffffffffffffa8747970655f746167a3693332a5737461746581a75061796c6f616493010203a5656467657390a5726f6f747391cf001fffffffffffff",
       "expect": {
+        "wire_input_fnv1a64": "15c4266a52af29c4",
         "outcome": "exact",
         "node_id_decimal": "9007199254740991",
         "root_id_decimal": "9007199254740991",
@@ -74,6 +76,7 @@
       "description": "2^53 + 1 \u2014 the smallest odd integer a double cannot represent; it rounds to 9007199254740992. A binding with a u64 or i64 identity type decodes it exactly; a double-backed one MUST refuse. The failing behaviour this pins is the third option: returning 9007199254740992, which addresses a different node and is undetectable downstream.",
       "wire_json": "{\"Snapshot\": {\"epoch\": 1, \"nodes\": [{\"node\": 9007199254740993, \"type_tag\": \"i32\", \"state\": {\"Payload\": [1, 2, 3]}}], \"edges\": [], \"roots\": [9007199254740993]}}",
       "expect": {
+        "wire_input_fnv1a64": "4925eadaa1eb589d",
         "outcome": "exact_or_reject",
         "node_id_decimal": "9007199254740993",
         "root_id_decimal": "9007199254740993",
@@ -95,6 +98,7 @@
       "description": "2^53 + 1 \u2014 the smallest odd integer a double cannot represent; it rounds to 9007199254740992. A binding with a u64 or i64 identity type decodes it exactly; a double-backed one MUST refuse. The failing behaviour this pins is the third option: returning 9007199254740992, which addresses a different node and is undetectable downstream.",
       "wire_msgpack_hex": "81a8536e617073686f7484a565706f636801a56e6f6465739183a46e6f6465cf0020000000000001a8747970655f746167a3693332a5737461746581a75061796c6f616493010203a5656467657390a5726f6f747391cf0020000000000001",
       "expect": {
+        "wire_input_fnv1a64": "8016203f06f67c38",
         "outcome": "exact_or_reject",
         "node_id_decimal": "9007199254740993",
         "root_id_decimal": "9007199254740993",
@@ -116,6 +120,7 @@
       "description": "The top of the declared u64 wire range. Only lazily-rs, lazily-zig, and lazily-cs represent it; the i64-backed and double-backed bindings MUST refuse. It also pins the msgpack encoding family \u2014 the identifier rides a `uint 64` (0xcf), so a decoder that reads it through a signed or float path is visible.",
       "wire_json": "{\"Snapshot\": {\"epoch\": 1, \"nodes\": [{\"node\": 18446744073709551615, \"type_tag\": \"i32\", \"state\": {\"Payload\": [1, 2, 3]}}], \"edges\": [], \"roots\": [18446744073709551615]}}",
       "expect": {
+        "wire_input_fnv1a64": "d9a374ae65fac717",
         "outcome": "exact_or_reject",
         "node_id_decimal": "18446744073709551615",
         "root_id_decimal": "18446744073709551615",
@@ -137,6 +142,7 @@
       "description": "The top of the declared u64 wire range. Only lazily-rs, lazily-zig, and lazily-cs represent it; the i64-backed and double-backed bindings MUST refuse. It also pins the msgpack encoding family \u2014 the identifier rides a `uint 64` (0xcf), so a decoder that reads it through a signed or float path is visible.",
       "wire_msgpack_hex": "81a8536e617073686f7484a565706f636801a56e6f6465739183a46e6f6465cfffffffffffffffffa8747970655f746167a3693332a5737461746581a75061796c6f616493010203a5656467657390a5726f6f747391cfffffffffffffffff",
       "expect": {
+        "wire_input_fnv1a64": "90b075753cb6980a",
         "outcome": "exact_or_reject",
         "node_id_decimal": "18446744073709551615",
         "root_id_decimal": "18446744073709551615",

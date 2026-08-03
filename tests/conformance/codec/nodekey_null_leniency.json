@@ -25,7 +25,7 @@
       "present"
     ],
     "scenario_count": 12,
-    "wire_encoding": "json scenarios carry `wire_json` as RAW TEXT and msgpack scenarios carry `wire_msgpack_hex` as lowercase hex, so the exact wire form under test \u2014 an ABSENT map entry versus an explicit `null` / msgpack `nil` (0xc0) \u2014 survives into the runner. A pre-parsed object cannot express the difference between the two in every host language, and re-serializing one from a decoded value would test the runner's encoder instead of the fixture's bytes.",
+    "wire_encoding": "json scenarios carry `wire_json` as RAW TEXT and msgpack scenarios carry `wire_msgpack_hex` as lowercase hex, so the exact wire form under test \u2014 an ABSENT map entry versus an explicit `null` / msgpack `nil` (0xc0) \u2014 survives into the runner. A pre-parsed object cannot express the difference between the two in every host language, and re-serializing one from a decoded value would test the runner's encoder instead of the fixture's bytes. A runner MUST compare `expect.wire_input_fnv1a64` against the exact bytes it hands to the decoder.",
     "reencode_obligation": "`expect.reencoded_key_field_present` is the half a decode assertion cannot reach. Reading `key: null` as absent is only half the rule: the encoder must still emit the OMITTED form, so a binding that round-trips the null straight back out is non-conforming even though its decoded value looks right. A runner MUST re-encode the decoded message and inspect the resulting frame for the presence of the field.",
     "anti_vacuity": "the `omitted` and `present` scenarios are the controls. A runner that reports 'absent' without decoding satisfies every `null` scenario, and one that never decodes at all satisfies all of them; `present` forces a real key through and `omitted` forces a real decode.",
     "generator": "scripts/gen_nodekey_null_leniency_fixture.py"
@@ -41,6 +41,7 @@
       "description": "The form a conforming encoder emits. Every binding already read it, so this is the control: a runner that reports 'absent' without decoding satisfies the null scenarios trivially and has to prove it decodes something here first.",
       "wire_json": "{\"Snapshot\": {\"epoch\": 4, \"nodes\": [{\"node\": 7, \"type_tag\": \"i32\", \"state\": {\"Payload\": [1, 2, 3]}}], \"edges\": [], \"roots\": [7]}}",
       "expect": {
+        "wire_input_fnv1a64": "789da264395e8680",
         "decoded_key": null,
         "reencoded_key_field_present": false,
         "node": 7,
@@ -63,6 +64,7 @@
       "description": "The form a conforming encoder emits. Every binding already read it, so this is the control: a runner that reports 'absent' without decoding satisfies the null scenarios trivially and has to prove it decodes something here first.",
       "wire_msgpack_hex": "81a8536e617073686f7484a565706f636804a56e6f6465739183a46e6f646507a8747970655f746167a3693332a5737461746581a75061796c6f616493010203a5656467657390a5726f6f74739107",
       "expect": {
+        "wire_input_fnv1a64": "4f1524e1c6f6f68f",
         "decoded_key": null,
         "reencoded_key_field_present": false,
         "node": 7,
@@ -85,6 +87,7 @@
       "description": "The form the clause is about. A serde-based peer that did not apply skip_serializing_if emits it, and rmp_serde's own decoder reads it as absent. lazily-py and lazily-zig REFUSED this frame; lazily-kt decoded it into a real key named `null`, because JsonNull is a JsonPrimitive whose content is the string \"null\". The re-encode assertion is what catches the third behaviour: reading it as absent is only half the rule, since the frame must go back out with the field OMITTED.",
       "wire_json": "{\"Snapshot\": {\"epoch\": 4, \"nodes\": [{\"node\": 7, \"type_tag\": \"i32\", \"state\": {\"Payload\": [1, 2, 3]}, \"key\": null}], \"edges\": [], \"roots\": [7]}}",
       "expect": {
+        "wire_input_fnv1a64": "c75ae34029eea21e",
         "decoded_key": null,
         "reencoded_key_field_present": false,
         "node": 7,
@@ -107,6 +110,7 @@
       "description": "The form the clause is about. A serde-based peer that did not apply skip_serializing_if emits it, and rmp_serde's own decoder reads it as absent. lazily-py and lazily-zig REFUSED this frame; lazily-kt decoded it into a real key named `null`, because JsonNull is a JsonPrimitive whose content is the string \"null\". The re-encode assertion is what catches the third behaviour: reading it as absent is only half the rule, since the frame must go back out with the field OMITTED.",
       "wire_msgpack_hex": "81a8536e617073686f7484a565706f636804a56e6f6465739184a46e6f646507a8747970655f746167a3693332a5737461746581a75061796c6f616493010203a36b6579c0a5656467657390a5726f6f74739107",
       "expect": {
+        "wire_input_fnv1a64": "a1d2506fd1226db6",
         "decoded_key": null,
         "reencoded_key_field_present": false,
         "node": 7,
@@ -129,6 +133,7 @@
       "description": "A real key, so the leniency above cannot be implemented by ignoring the field outright. A decoder that returns absent for everything passes both scenarios above and fails here.",
       "wire_json": "{\"Snapshot\": {\"epoch\": 4, \"nodes\": [{\"node\": 7, \"type_tag\": \"i32\", \"state\": {\"Payload\": [1, 2, 3]}, \"key\": \"scores/alice\"}], \"edges\": [], \"roots\": [7]}}",
       "expect": {
+        "wire_input_fnv1a64": "a0b88dbc45ec99f5",
         "decoded_key": "scores/alice",
         "reencoded_key_field_present": true,
         "node": 7,
@@ -151,6 +156,7 @@
       "description": "A real key, so the leniency above cannot be implemented by ignoring the field outright. A decoder that returns absent for everything passes both scenarios above and fails here.",
       "wire_msgpack_hex": "81a8536e617073686f7484a565706f636804a56e6f6465739184a46e6f646507a8747970655f746167a3693332a5737461746581a75061796c6f616493010203a36b6579ac73636f7265732f616c696365a5656467657390a5726f6f74739107",
       "expect": {
+        "wire_input_fnv1a64": "1ede0eb675a50976",
         "decoded_key": "scores/alice",
         "reencoded_key_field_present": true,
         "node": 7,
@@ -173,6 +179,7 @@
       "description": "The same three forms on the OTHER field carrying an optional NodeKey. The NodeAdd delta op is where the same defect lived in all three bindings \u2014 one fix per binding covers both, but only a fixture that replays both proves it.",
       "wire_json": "{\"Delta\": {\"base_epoch\": 3, \"epoch\": 4, \"ops\": [{\"NodeAdd\": {\"node\": 7, \"type_tag\": \"i32\", \"state\": {\"Payload\": [1, 2, 3]}}}]}}",
       "expect": {
+        "wire_input_fnv1a64": "3f8c12a6ffc5c866",
         "decoded_key": null,
         "reencoded_key_field_present": false,
         "node": 7,
@@ -195,6 +202,7 @@
       "description": "The same three forms on the OTHER field carrying an optional NodeKey. The NodeAdd delta op is where the same defect lived in all three bindings \u2014 one fix per binding covers both, but only a fixture that replays both proves it.",
       "wire_msgpack_hex": "81a544656c746183aa626173655f65706f636803a565706f636804a36f70739181a74e6f646541646483a46e6f646507a8747970655f746167a3693332a5737461746581a75061796c6f616493010203",
       "expect": {
+        "wire_input_fnv1a64": "1c99f06e7e46a0d2",
         "decoded_key": null,
         "reencoded_key_field_present": false,
         "node": 7,
@@ -217,6 +225,7 @@
       "description": "The null form on NodeAdd. Worth replaying separately rather than assuming it shares NodeSnapshot's path: in lazily-kt the two sites were separate expressions, and a fix applied to one would have left the other inventing a key named `null`.",
       "wire_json": "{\"Delta\": {\"base_epoch\": 3, \"epoch\": 4, \"ops\": [{\"NodeAdd\": {\"node\": 7, \"type_tag\": \"i32\", \"state\": {\"Payload\": [1, 2, 3]}, \"key\": null}}]}}",
       "expect": {
+        "wire_input_fnv1a64": "c6a699e4014d488a",
         "decoded_key": null,
         "reencoded_key_field_present": false,
         "node": 7,
@@ -239,6 +248,7 @@
       "description": "The null form on NodeAdd. Worth replaying separately rather than assuming it shares NodeSnapshot's path: in lazily-kt the two sites were separate expressions, and a fix applied to one would have left the other inventing a key named `null`.",
       "wire_msgpack_hex": "81a544656c746183aa626173655f65706f636803a565706f636804a36f70739181a74e6f646541646484a46e6f646507a8747970655f746167a3693332a5737461746581a75061796c6f616493010203a36b6579c0",
       "expect": {
+        "wire_input_fnv1a64": "d1af81f7ebb28949",
         "decoded_key": null,
         "reencoded_key_field_present": false,
         "node": 7,
@@ -261,6 +271,7 @@
       "description": "A real key on NodeAdd, for the same reason as the Snapshot case.",
       "wire_json": "{\"Delta\": {\"base_epoch\": 3, \"epoch\": 4, \"ops\": [{\"NodeAdd\": {\"node\": 7, \"type_tag\": \"i32\", \"state\": {\"Payload\": [1, 2, 3]}, \"key\": \"scores/alice\"}}]}}",
       "expect": {
+        "wire_input_fnv1a64": "ebfa9f794de45be5",
         "decoded_key": "scores/alice",
         "reencoded_key_field_present": true,
         "node": 7,
@@ -283,6 +294,7 @@
       "description": "A real key on NodeAdd, for the same reason as the Snapshot case.",
       "wire_msgpack_hex": "81a544656c746183aa626173655f65706f636803a565706f636804a36f70739181a74e6f646541646484a46e6f646507a8747970655f746167a3693332a5737461746581a75061796c6f616493010203a36b6579ac73636f7265732f616c696365",
       "expect": {
+        "wire_input_fnv1a64": "59a2ea9a7c192609",
         "decoded_key": "scores/alice",
         "reencoded_key_field_present": true,
         "node": 7,
