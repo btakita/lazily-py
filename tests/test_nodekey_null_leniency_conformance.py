@@ -331,12 +331,6 @@ def test_nodekey_null_leniency_conformance() -> None:
         )
         assert_key(expect, "epoch", epoch)
 
-    assert replayed == 12, "two fields x three key forms x two codecs"
-    assert keys_decoded == 4, (
-        f"decoded {keys_decoded} keys, want 4: only the `present` scenarios carry one, "
-        "so a runner reporting absent for everything satisfies the null cases trivially"
-    )
-
     # Against what the run REPLAYED, not against hand-written literals and not
     # against len(fixture["scenarios"]) — the old forms compared the fixture to a
     # constant or to itself, so a runner that stopped replaying a wire form or a
@@ -369,3 +363,9 @@ def test_nodekey_null_leniency_conformance() -> None:
     )
 
     verify_prose(fixture)
+
+    assert replayed == 12, "two fields x three key forms x two codecs"
+    assert keys_decoded == 4, (
+        f"decoded {keys_decoded} keys, want 4: only the `present` scenarios carry one, "
+        "so a runner reporting absent for everything satisfies the null cases trivially"
+    )

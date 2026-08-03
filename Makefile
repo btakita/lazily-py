@@ -1,4 +1,4 @@
-.PHONY: init build test lint lint-fix format-check format-fix type-check clean publish-test publish bench bench-scale compile conformance-coverage ci-reach
+.PHONY: init build test lint lint-fix format-check format-fix type-check clean publish-test publish bench bench-scale compile conformance-coverage assertion-ordering-check ci-reach
 
 # Install development dependencies and package in editable mode
 init: PY_VERSION = $(shell [ -f .python-version ] && \
@@ -77,7 +77,10 @@ type-check:
 test-interop-peer:
 	uv run poe interop_peer
 
-check: format-check lint type-check test conformance-coverage test-interop-peer ci-reach
+assertion-ordering-check:
+	python3 ../lazily-spec/scripts/check-assertion-ordering.py --binding py --root .
+
+check: format-check lint type-check test conformance-coverage test-interop-peer assertion-ordering-check ci-reach
 
 # Run the micro-benchmark suite (see BENCHMARKS.md)
 bench:

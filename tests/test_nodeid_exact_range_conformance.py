@@ -172,10 +172,6 @@ def test_nodeid_exact_range_conformance() -> None:
         assert len(snapshot.roots) == 1, f"{scenario['id']}: one root"
         assert_key(expect, "root_id_decimal", str(snapshot.roots[0]))
 
-    assert accepted == 6, (
-        f"accepted {accepted} scenarios, want 6: a Python int is arbitrary-precision, "
-        "so lazily-py has no identifier in this corpus it may refuse"
-    )
     # Against what the run DECODED, not against len(fixture["scenarios"]) — the
     # old form compared the fixture to itself and stayed green over a runner that
     # decoded nothing, which is the very vacuity `anti_vacuity` names and now
@@ -196,3 +192,8 @@ def test_nodeid_exact_range_conformance() -> None:
     )
 
     verify_prose(fixture)
+
+    assert accepted == 6, (
+        f"accepted {accepted} scenarios, want 6: a Python int is arbitrary-precision, "
+        "so lazily-py has no identifier in this corpus it may refuse"
+    )

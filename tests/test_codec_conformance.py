@@ -275,7 +275,6 @@ def _replay(
         _assert_values(block, round_tripped)
         replayed += 1
 
-    assert replayed == 3, "one scenario per IpcMessage variant"
     return replayed
 
 
@@ -292,6 +291,10 @@ def _assert_scenario_count(fixture: dict, replayed: int) -> None:
     assert_key(block, "scenario_count", replayed)
 
 
+def _assert_replay_floor(replayed: int) -> None:
+    assert replayed == 3, "one scenario per IpcMessage variant"
+
+
 def test_json_frames_round_trip() -> None:
     fixture = _load(_JSON_FIXTURE)
     _assert_fixture_block(fixture, "json", byte_canonical=True)
@@ -303,6 +306,7 @@ def test_json_frames_round_trip() -> None:
     )
     _assert_scenario_count(fixture, replayed)
     verify_prose(fixture)
+    _assert_replay_floor(replayed)
 
 
 def test_msgpack_frames_round_trip() -> None:
@@ -324,3 +328,4 @@ def test_msgpack_frames_round_trip() -> None:
     )
     _assert_scenario_count(fixture, replayed)
     verify_prose(fixture)
+    _assert_replay_floor(replayed)

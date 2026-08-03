@@ -446,14 +446,6 @@ def test_blob_backend_discriminator_conformance() -> None:
         assert_key(expect, "blob_epoch", blob.epoch)
         assert_key(expect, "checksum", blob.checksum)
 
-    assert accepted == 10, (
-        f"accepted {accepted} scenarios, want 10: five accepting backend forms "
-        f"(omitted, shm, arrow, in_process, null) x two codecs"
-    )
-    assert rejected == 4, (
-        f"rejected {rejected} scenarios, want 4: the `rdma` and non-string frames "
-        f"under each codec"
-    )
     assert_key(block, "scenario_count", accepted + rejected)
     assert_key(block, "codecs", sorted(observed_codecs))
     assert_key(block, "outcomes", sorted(observed_outcomes))
@@ -469,6 +461,22 @@ def test_blob_backend_discriminator_conformance() -> None:
         lambda want: sorted(want) == sorted(observed_rejection_kinds),
         where=f"observed kinds {sorted(observed_rejection_kinds)}",
     )
+    _assert_backend_vocabulary_is_complete(block, decoded_backends)
+
+    # The fixture's replay is finished, so the discharge claims above can be
+    # checked: the discharged set against `assertions.prose` (which is what
+    # consumes that key), and every named key against what this run really
+    # asserted (#lzprosekeyconvention).
+    verify_prose(fixture)
+
+    assert accepted == 10, (
+        f"accepted {accepted} scenarios, want 10: five accepting backend forms "
+        f"(omitted, shm, arrow, in_process, null) x two codecs"
+    )
+    assert rejected == 4, (
+        f"rejected {rejected} scenarios, want 4: the `rdma` and non-string frames "
+        f"under each codec"
+    )
     # Every wire shape is carried under BOTH codecs. Several bindings bridge
     # msgpack into the same DOM the JSON decoder produces, so this proves the
     # bridge and the encoder, NOT two independent discriminator verdicts — see
@@ -476,17 +484,8 @@ def test_blob_backend_discriminator_conformance() -> None:
     assert forms_by_codec == dict.fromkeys(observed_codecs, observed_forms), (
         f"each backend form must be replayed under every codec; got {forms_by_codec}"
     )
-
-    _assert_backend_vocabulary_is_complete(block, decoded_backends)
-
     assert reencode_present == 4, (
         f"re-encoded the field in {reencode_present} scenarios, want 4: only the "
         "`arrow` and `in_process` frames may carry it, and a binding that echoes "
         "the received field back out writes it in six"
     )
-
-    # The fixture's replay is finished, so the discharge claims above can be
-    # checked: the discharged set against `assertions.prose` (which is what
-    # consumes that key), and every named key against what this run really
-    # asserted (#lzprosekeyconvention).
-    verify_prose(fixture)

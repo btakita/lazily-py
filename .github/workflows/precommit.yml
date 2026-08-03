@@ -101,6 +101,9 @@ jobs:
       - name: Interop peer self-check (make test-interop-peer)
         run: uv run poe interop_peer
 
+      - name: Assertion observation ordering (#lzassertordering)
+        run: python3 ../lazily-spec/scripts/check-assertion-ordering.py --binding py --root .
+
       # The gate that keeps every step above honest (#lzcheckcireachguard). It
       # compares `make check`'s prerequisite closure against the run: bodies in
       # this file and fails on any target CI does not reach. Comments inside run:
