@@ -15,13 +15,16 @@ Writes to ``LAZILY_CONFORMANCE_MANIFEST``; a no-op when unset, so a bare
 ``pytest tests/`` is unaffected.
 """
 
+import contextlib
 import os
 import sys
 from pathlib import Path
 
 from conformance_assert import (
+    block_bind_failures,
     consumption_failures,
     prose_failures,
+    record_declared_blocks,
     scenario_failures,
 )
 
@@ -31,16 +34,41 @@ _MARKER = os.path.join("lazily-spec", "conformance") + os.sep
 _opened: set[str] = set()
 
 
-def _record(path: object) -> None:
+def _record(path: object) -> str | None:
     try:
         text = os.fspath(path)  # type: ignore[arg-type]
     except TypeError:
-        return
+        return None
     idx = text.find(_MARKER)
     if idx == -1:
+        return None
+    rel = text[idx + len(_MARKER) :].replace(os.sep, "/")
+    _opened.add(rel)
+    return rel
+
+
+# Rung 0 (#lznullformblind): fixtures whose `assertions` blocks have already been
+# inventoried this session. The inventory is per-file, so a fixture opened by
+# four runners is parsed once.
+_declared: set[str] = set()
+
+
+def _declare_blocks(rel: str | None, path: Path) -> None:
+    """Inventory the assertion blocks a corpus fixture carries, at READ time.
+
+    Parsing the bytes rather than asking the runner is the whole point: rungs 2-4
+    are all scoped to a block some runner BOUND, so a block no runner ever binds
+    is invisible to every one of them. Reading the file is the only moment the
+    corpus's full set of blocks is in hand.
+    """
+    if rel is None or rel in _declared or not rel.endswith(".json"):
         return
-    rel = text[idx + len(_MARKER) :]
-    _opened.add(rel.replace(os.sep, "/"))
+    _declared.add(rel)
+    # Bookkeeping never fails a suite; a fixture we cannot read shows up
+    # downstream as an inventory that fell short of the floor, which is the
+    # outcome the guard wants.
+    with contextlib.suppress(OSError, UnicodeDecodeError):
+        record_declared_blocks(rel, _orig_read_text(path, encoding="utf-8"))
 
 
 # Recording is unconditional; only the *write* is gated on the env var. The
@@ -53,12 +81,12 @@ _orig_open = Path.open
 
 
 def _read_text(self: Path, *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
-    _record(self)
+    _declare_blocks(_record(self), self)
     return _orig_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
 
 
 def _open(self: Path, *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
-    _record(self)
+    _declare_blocks(_record(self), self)
     return _orig_open(self, *args, **kwargs)  # type: ignore[arg-type]
 
 
@@ -119,6 +147,24 @@ def pytest_sessionfinish(session, exitstatus) -> None:  # type: ignore[no-untype
             "  LAZILY_SPEC_CONFORMANCE_DIR at a copy.",
             "",
         ]
+
+    # Rung 0 runs FIRST because it is the rung the others stand on: an unbound
+    # block makes every verdict below it silent rather than wrong.
+    unbound = block_bind_failures(enforce_floor=bool(_opened))
+    if unbound:
+        report += [
+            "",
+            "CONFORMANCE ASSERTION BLOCK NEVER BOUND (#lznullformblind)",
+            "  A fixture this suite OPENED carries an `assertions` block that no",
+            "  runner ever handed to a tracker. Every guard below is scoped to a",
+            "  block a runner bound, so this one reports nothing at all rather",
+            "  than reporting a gap: its keys are not unread — nothing reads them.",
+            "  Bind it via tracked(...) / instrument(...) and assert its keys, or",
+            "  declare it in KNOWN_UNBOUND_BLOCKS with a reason.",
+            "",
+        ]
+        report += [f"  {line}" for line in unbound]
+        report.append("")
 
     failures = consumption_failures()
     if failures:
@@ -184,5 +230,7 @@ def pytest_sessionfinish(session, exitstatus) -> None:  # type: ignore[no-untype
 
     if report:
         sys.stderr.write("\n".join(report) + "\n")
-    if (failures or prose_bad or scenario_bad or vacuous) and exitstatus == 0:
+    if (
+        failures or prose_bad or scenario_bad or unbound or vacuous
+    ) and exitstatus == 0:
         session.exitstatus = 1

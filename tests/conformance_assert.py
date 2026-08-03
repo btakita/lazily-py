@@ -196,17 +196,22 @@ __all__ = [
     "assert_invalidates",
     "assert_key",
     "assert_key_with",
+    "block_bind_failures",
     "consumption_failures",
     "corpus_dir",
+    "declared_block_count",
     "discharged_prose",
     "excuse_key",
     "excuse_scenario",
     "instrument",
     "prose_failures",
     "prose_key",
+    "record_block_bind",
+    "record_declared_blocks",
     "record_scenario",
     "replayed_scenarios",
     "reset",
+    "reset_blocks",
     "scenario_failures",
     "scenario_id",
     "scenario_view",
@@ -234,6 +239,163 @@ PROSE_KEYS = frozenset({"comment", "description", "note", "notes", "reason", "wh
 #: it: a runner that ignores it fails with an unconsumed key, which is what makes
 #: the rollout self-enforcing.
 PROSE_DECLARATION_KEY = "prose"
+
+
+# ---------------------------------------------------------------------------
+# Rung 0: the assertion-block BIND ledger (#lznullformblind)
+# ---------------------------------------------------------------------------
+#
+# Every rung above this one is scoped to a block some runner already BOUND to a
+# tracker. The unconsumed-key guard fires on a key nothing read; the
+# read-but-unasserted guard on a key read and discarded; the prose ledger on a
+# discharge naming nothing. None of them can fire for a block NO runner ever
+# bound, because there is no ledger for it at all: its keys are not unread —
+# nothing reads them, and the fixture reports exactly nothing. lazily-dart found
+# two such blocks carrying eight silent keys, one of them the anti-spoof
+# invariant its fixture exists for; lazily-cpp found a third.
+#
+# So the loader inventories every ``assertions`` block at READ time (the
+# ``Path.read_text`` recorder in ``conftest.py``) and ``TrackedBlock.__init__``
+# books one as BOUND. The two sides are matched by the block's CONTENT digest and
+# never by its ``where`` label: runners spell those labels inconsistently
+# (``assertions``, ``frames[warn].assertions``, ``scenarios[3].expect``) and a
+# label-keyed ledger would silently miss the mismatch rather than report it.
+
+#: An assertion block that genuinely cannot be bound belongs HERE, as a
+#: documented excuse the guard reads on every run, not as a runner fabricated to
+#: manufacture coverage. Keys are ``"fixture|where"``; values are non-empty
+#: reasons — an excuse with no reason is an unexplained gap wearing a green badge.
+KNOWN_UNBOUND_BLOCKS: dict[str, str] = {}
+
+#: Positive-evidence floor (``#lzvacuousrun``). Zero declared blocks means zero
+#: unbound blocks, which reports OK having compared nothing. Do not lower this to
+#: fix a failure.
+MIN_DECLARED_BLOCKS = 20
+
+#: digest -> {"fixture|where"} for every block an opened fixture carried.
+_DECLARED_BLOCKS: dict[str, set[str]] = {}
+#: digests a runner handed to a tracker.
+_BOUND_BLOCKS: set[str] = set()
+
+
+def block_digest(value: Mapping[str, Any]) -> str:
+    """Content key for an assertion block.
+
+    Canonical (sorted, separator-normalised) JSON so the declaring side — which
+    parses raw fixture bytes — and the binding side — which sees a ``dict`` a
+    runner may have rebuilt — agree. A block is booked by what it SAYS rather
+    than by what a runner chose to call it.
+    """
+    try:
+        text = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    except (TypeError, ValueError):
+        return ""
+    return f"{hash_fnv1a(text):016x}"
+
+
+def hash_fnv1a(text: str) -> int:
+    """FNV-1a over UTF-8. Small, dependency-free, and stable across processes —
+    unlike ``hash()``, which PYTHONHASHSEED randomises per run."""
+    digest = 0xCBF29CE484222325
+    for byte in text.encode("utf-8"):
+        digest ^= byte
+        digest = (digest * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return digest
+
+
+def record_declared_blocks(fixture: str, text: str) -> None:
+    """Inventory every ``assertions`` block a freshly read fixture carries.
+
+    Top-level plus any carried per-frame, per-scenario or per-reject. Parsing the
+    bytes rather than asking the runner is the whole point: a block the runner
+    never looks at is exactly the one this rung exists to find.
+    """
+    try:
+        doc = json.loads(text)
+    except (ValueError, TypeError):
+        return
+    if not isinstance(doc, dict):
+        return
+
+    def declare(where: str, block: Any) -> None:
+        if not isinstance(block, dict):
+            return
+        digest = block_digest(block)
+        if digest:
+            _DECLARED_BLOCKS.setdefault(digest, set()).add(f"{fixture}|{where}")
+
+    declare("assertions", doc.get("assertions"))
+    for container in ("frames", "scenarios", "rejects"):
+        items = doc.get(container)
+        if not isinstance(items, list):
+            continue
+        for index, item in enumerate(items):
+            if isinstance(item, dict):
+                declare(f"{container}[{index}].assertions", item.get("assertions"))
+
+
+def record_block_bind(data: Mapping[str, Any]) -> None:
+    """Book an assertion block as BOUND. Called from ``TrackedBlock.__init__``,
+    so every block a runner hands to the tracker is booked whatever it calls it."""
+    digest = block_digest(data)
+    if digest:
+        _BOUND_BLOCKS.add(digest)
+
+
+def declared_block_count() -> int:
+    """How many distinct blocks this run inventoried (the floor's input)."""
+    return len(_DECLARED_BLOCKS)
+
+
+def reset_blocks() -> None:
+    """Drop the bind ledger (tests of the guard itself)."""
+    _DECLARED_BLOCKS.clear()
+    _BOUND_BLOCKS.clear()
+
+
+def block_bind_failures(*, enforce_floor: bool = False) -> list[str]:
+    """Report lines for blocks an opened fixture carried and no runner bound.
+
+    ``enforce_floor`` applies the positive-evidence floor and is set by
+    ``conftest`` whenever the run opened any canonical fixture at all. It has to
+    be conditional: a checkout without the ``lazily-spec`` sibling opens nothing
+    and every conformance suite skips by design, and failing that run would be
+    reporting on an absence rather than on a gap. But a run that DID open
+    fixtures and inventoried no block has a detached recorder, which reports zero
+    unbound blocks — the vacuous green this rung would otherwise inherit.
+    """
+    lines: list[str] = []
+
+    for site, reason in sorted(KNOWN_UNBOUND_BLOCKS.items()):
+        if not reason.strip():
+            lines.append(
+                f"{site}: KNOWN_UNBOUND_BLOCKS entry has no reason. An excuse with "
+                f"no reason is an unexplained gap wearing a green badge."
+            )
+
+    unbound: list[str] = []
+    for digest, sites in sorted(_DECLARED_BLOCKS.items()):
+        if digest in _BOUND_BLOCKS:
+            continue
+        for site in sorted(sites):
+            if site in KNOWN_UNBOUND_BLOCKS:
+                continue
+            unbound.append(site)
+    for site in unbound:
+        lines.append(
+            f"{site}: carried by an OPENED fixture and bound by no runner. Bind it "
+            f"with tracked(...)/instrument(...) and assert its keys, or add it to "
+            f"KNOWN_UNBOUND_BLOCKS with a reason so the gap stays visible."
+        )
+
+    declared = len(_DECLARED_BLOCKS)
+    if enforce_floor and declared < MIN_DECLARED_BLOCKS:
+        lines.append(
+            f"only {declared} distinct assertion block(s) were inventoried, expected "
+            f">= {MIN_DECLARED_BLOCKS}. The loader-side inventory detached, or "
+            f"fixtures stopped being read. Do not lower MIN_DECLARED_BLOCKS."
+        )
+    return lines
 
 
 class _Ledger:
@@ -334,6 +496,12 @@ class TrackedBlock(Mapping[str, Any]):
         self._data = dict(data)
         self.fixture = fixture
         self.block = block
+        # Rung 0 (#lznullformblind): book this block as BOUND, keyed by its
+        # CONTENT rather than by `block`. Every other rung is scoped to blocks a
+        # runner already bound, so a block nothing binds reports nothing at all —
+        # its keys are not unread, nothing reads them. Content keying is what
+        # stops the ledger inheriting the inconsistent labels runners choose.
+        record_block_bind(self._data)
         ledger = _LEDGERS.setdefault((fixture, block), _Ledger(fixture, block))
         ledger.keys.update(self._data)
         # Prose keys count as consumed AND as satisfied: the declaration at the

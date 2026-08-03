@@ -22,18 +22,25 @@ from typing import TYPE_CHECKING
 
 import pytest
 from conformance_assert import (
+    _BOUND_BLOCKS,
+    _DECLARED_BLOCKS,
+    _LEDGERS,
+    KNOWN_UNBOUND_BLOCKS,
     TrackedBlock,
     assert_key,
     assert_key_with,
+    block_bind_failures,
     consumption_failures,
     excuse_key,
     excuse_scenario,
     instrument,
     prose_failures,
     prose_key,
+    record_declared_blocks,
     record_scenario,
     replayed_scenarios,
     reset,
+    reset_blocks,
     scenario_failures,
     scenario_id,
     scenarios,
@@ -724,3 +731,137 @@ def test_a_fixture_the_suite_never_opened_is_not_held_to_scenarios(
     """Fixture-level gaps are ``KNOWN_UNCOVERED``'s verdict, not this rung's."""
     failures, _ = scenario_failures([], corpus=_corpus(tmp_path, [{"name": "x"}]))
     assert not [line for line in failures if line.startswith(_SELFTEST)]
+
+
+# ---------------------------------------------------------------------------
+# Rung 0: a block no runner ever bound (#lznullformblind)
+# ---------------------------------------------------------------------------
+#
+# Every rung above is scoped to a block a runner already handed to a tracker, so
+# each of these tests has to be validated against the pre-fix shape: a detector
+# that reports clean over a planted violation is the same vacuous green the rung
+# exists to remove.
+
+
+@pytest.fixture
+def block_ledger():
+    """Snapshot and restore the session-wide bind ledger.
+
+    The real runners have already booked ~30 blocks by the time these run, and a
+    self-test that plants a deliberate violation must not leave it behind — nor
+    erase the evidence the session verdict reads.
+    """
+    saved_declared = {key: set(value) for key, value in _DECLARED_BLOCKS.items()}
+    saved_bound = set(_BOUND_BLOCKS)
+    saved_excuses = dict(KNOWN_UNBOUND_BLOCKS)
+    # Binding a planted block also opens a rung-2 consumption ledger for it, and
+    # a planted block is never asserted — so drop whatever this test created,
+    # exactly as the other self-tests do with `reset(fixture=...)`.
+    saved_fixtures = {fixture for fixture, _ in _LEDGERS}
+    reset_blocks()
+    try:
+        yield
+    finally:
+        reset_blocks()
+        _DECLARED_BLOCKS.update(saved_declared)
+        _BOUND_BLOCKS.update(saved_bound)
+        KNOWN_UNBOUND_BLOCKS.clear()
+        KNOWN_UNBOUND_BLOCKS.update(saved_excuses)
+        for fixture in {fixture for fixture, _ in _LEDGERS} - saved_fixtures:
+            reset(fixture=fixture)
+
+
+_UNBOUND_FIXTURE = json.dumps(
+    {
+        "assertions": {
+            "forwarded_from_is_server_registered": True,
+            "roster_sorted_ascending": True,
+        }
+    }
+)
+
+
+def test_a_declared_block_no_runner_bound_is_reported_and_named(block_ledger) -> None:
+    record_declared_blocks("selftest/unbound.json", _UNBOUND_FIXTURE)
+
+    reported = block_bind_failures()
+    assert reported, "a block nothing bound produced no report line"
+    assert "selftest/unbound.json|assertions" in reported[0]
+    assert "bound by no runner" in reported[0]
+
+
+def test_binding_the_block_clears_it(block_ledger) -> None:
+    record_declared_blocks("selftest/unbound.json", _UNBOUND_FIXTURE)
+    assert block_bind_failures(), "precondition: the block starts unbound"
+
+    tracked(
+        json.loads(_UNBOUND_FIXTURE)["assertions"],
+        fixture="selftest/unbound.json",
+    )
+    assert not block_bind_failures()
+
+
+def test_the_bind_is_keyed_by_content_not_by_the_where_label(block_ledger) -> None:
+    """Runners spell the label inconsistently; a label-keyed ledger would miss
+    the mismatch instead of reporting it."""
+    record_declared_blocks("selftest/unbound.json", _UNBOUND_FIXTURE)
+
+    # Bound under a completely different fixture name AND block label.
+    tracked(
+        json.loads(_UNBOUND_FIXTURE)["assertions"],
+        fixture="some/other.json",
+        block="frames[3].expect",
+    )
+    assert not block_bind_failures()
+
+
+def test_a_block_with_different_content_does_not_satisfy_the_bind(
+    block_ledger,
+) -> None:
+    record_declared_blocks("selftest/unbound.json", _UNBOUND_FIXTURE)
+
+    tracked({"forwarded_from_is_server_registered": True}, fixture="selftest/near.json")
+    reported = block_bind_failures()
+    assert reported and "selftest/unbound.json|assertions" in reported[0]
+
+
+def test_per_frame_and_per_scenario_blocks_are_inventoried(block_ledger) -> None:
+    record_declared_blocks(
+        "selftest/nested.json",
+        json.dumps(
+            {
+                "frames": [{"assertions": {"a": 1}}, {"note": "no block here"}],
+                "scenarios": [{"assertions": {"b": 2}}],
+            }
+        ),
+    )
+    sites = sorted(site for sites in _DECLARED_BLOCKS.values() for site in sites)
+    assert sites == [
+        "selftest/nested.json|frames[0].assertions",
+        "selftest/nested.json|scenarios[0].assertions",
+    ]
+
+
+def test_an_excuse_suppresses_the_report(block_ledger) -> None:
+    record_declared_blocks("selftest/unbound.json", _UNBOUND_FIXTURE)
+    KNOWN_UNBOUND_BLOCKS["selftest/unbound.json|assertions"] = (
+        "the server is unreachable"
+    )
+
+    assert not block_bind_failures()
+
+
+def test_an_excuse_with_no_reason_is_itself_the_failure(block_ledger) -> None:
+    KNOWN_UNBOUND_BLOCKS["selftest/unbound.json|assertions"] = "   "
+
+    reported = block_bind_failures()
+    assert reported and "no reason" in reported[0]
+
+
+def test_the_floor_fails_when_the_inventory_collapses(block_ledger) -> None:
+    """Zero declared blocks means zero unbound blocks — OK over nothing."""
+    assert not block_bind_failures(enforce_floor=False)
+
+    reported = block_bind_failures(enforce_floor=True)
+    assert reported, "an empty inventory passed the floor"
+    assert "distinct assertion block(s) were inventoried" in reported[0]
