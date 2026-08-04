@@ -39,7 +39,6 @@ from conformance_assert import (
     TrackedBlock,
     assert_key,
     assert_key_with,
-    excuse_key,
     fnv1a64_hex,
     instrument,
     prose_key,
@@ -262,14 +261,6 @@ def test_nodekey_null_leniency_conformance() -> None:
         # compared against the frames really replayed.
         discharged_by=["decoded_key", "key_forms", "scenario_count"],
     )
-    # NOT prose: a provenance path with no lazily-py-side value to compare.
-    excuse_key(
-        block,
-        "generator",
-        "the fixture's provenance — the script that emitted it lives in "
-        "lazily-spec, so there is no lazily-py-side value to compare it to",
-    )
-
     # Anti-vacuity in both directions. A runner that never decodes reports
     # "absent" for everything and satisfies all eight omitted/null scenarios; the
     # `present` count is what only a real decode can produce.

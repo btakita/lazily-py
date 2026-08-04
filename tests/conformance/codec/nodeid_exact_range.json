@@ -2,6 +2,7 @@
   "description": "Decoder obligation for the NodeId/PeerId exact-representation bound (protocol.md \u00a7 NodeId / PeerId, `#lzspecdecoderbound`). protocol.md stated the 2^53 bound as a PRODUCER obligation and said nothing about what a decoder does when it receives a violation, which is exactly where the bindings diverged: lazily-js and lazily-dart refuse deliberately, and the other seven happen to fail closed because their json parser overflows \u2014 a property no test held in place. The clause is now normative \u2014 a decoder that cannot represent a received identifier exactly MUST reject the frame rather than round it \u2014 and this fixture replays it instead of asserting it in prose. Silent rounding is the worst of the three available behaviours because the frame decodes cleanly, the identifier addresses a DIFFERENT node, and nothing downstream can tell.",
   "protocol_version": 1,
   "kind": "NodeIdExactRange",
+  "generator": "scripts/gen_nodeid_exact_range_fixture.py",
   "assertions": {
     "prose": [
       "clause",
@@ -20,8 +21,7 @@
       "exact": "the decoder MUST accept the frame and yield exactly `node_id_decimal`",
       "exact_or_reject": "the decoder MUST either yield exactly `node_id_decimal` or fail the decode with an error; yielding any other value is the violation"
     },
-    "anti_vacuity": "the two `exact` scenarios are the control. `exact_or_reject` alone is satisfied by a runner that never decodes anything, so a binding must prove it decodes the boundary value correctly before its refusals count.",
-    "generator": "scripts/gen_nodeid_exact_range_fixture.py"
+    "anti_vacuity": "the two `exact` scenarios are the control. `exact_or_reject` alone is satisfied by a runner that never decodes anything, so a binding must prove it decodes the boundary value correctly before its refusals count."
   },
   "scenarios": [
     {

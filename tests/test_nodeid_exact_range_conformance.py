@@ -29,7 +29,6 @@ from conformance_assert import (
     assert_key,
     assert_key_set,
     assert_key_with,
-    excuse_key,
     fnv1a64_hex,
     instrument,
     prose_key,
@@ -107,14 +106,6 @@ def test_nodeid_exact_range_conformance() -> None:
     )
     # NOT prose: `outcomes` maps a vocabulary to English glosses, so the
     # assertion is the KEY SET and the parent key's own assertion discharges it.
-    # `generator` is a provenance path with no lazily-py-side value to compare.
-    excuse_key(
-        block,
-        "generator",
-        "the fixture's provenance — the script that emitted it lives in "
-        "lazily-spec, so there is no lazily-py-side value to compare it to",
-    )
-
     # Anti-vacuity. `exact_or_reject` is satisfied by a runner that decodes
     # nothing, so the count of scenarios this run actually ACCEPTED is the
     # assertion that the decoder ran. Python's range covers the corpus, so the

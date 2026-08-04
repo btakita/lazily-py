@@ -68,7 +68,6 @@ from conformance_assert import (
     TrackedBlock,
     assert_key,
     assert_key_with,
-    excuse_key,
     fnv1a64_hex,
     instrument,
     prose_key,
@@ -331,14 +330,6 @@ def test_blob_backend_discriminator_conformance() -> None:
         # are not flattened into one table either.
         discharged_by=["rejected", "decoded_backend"],
     )
-    # NOT prose: a path this runner has nothing to compare against.
-    excuse_key(
-        block,
-        "generator",
-        "the fixture's provenance — the script that emitted it lives in "
-        "lazily-spec, so there is no lazily-py-side value to compare it to",
-    )
-
     # Anti-vacuity, in the directions the fixture names. `accepted` and
     # `rejected` are the two outcomes, and a runner that decoded nothing would
     # book zero of the first; `decoded_backends` is the set of DISTINCT values a
