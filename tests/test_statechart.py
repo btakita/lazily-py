@@ -69,6 +69,16 @@ def test_statechart_conformance(name: str) -> None:
             assert chart.last_actions() == step["actions"], f"{label}: actions"
 
 
+def test_malformed_statechart_corpus_is_rejected() -> None:
+    path = _SPEC_FIXTURES / "malformed_rejected.json"
+    assert path.exists(), "malformed statechart fixture missing from lazily-spec"
+    fixture = json.loads(path.read_text())
+    assert fixture["cases"], "malformed corpus must contain cases"
+    for case in fixture["cases"]:
+        with pytest.raises((TypeError, KeyError)):
+            ChartDef.from_chart(case["chart"])
+
+
 def test_flat_chart_walks_up_and_resolves_lca() -> None:
     chart = StateChart(
         {},

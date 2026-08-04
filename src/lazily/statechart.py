@@ -95,11 +95,14 @@ def _parse_transition(raw: object, state_id: str, event: str) -> _Transition:
             )
         else:
             raise TypeError(f"{label}: guard must be a string")
+    raw_internal = obj.get("internal")
+    if raw_internal is not None and not isinstance(raw_internal, bool):
+        raise TypeError(f"{label}: internal must be a boolean")
     return _Transition(
         target,
         guard,
         _parse_action_list(obj.get("action"), f"{label} action"),
-        obj.get("internal") is True,
+        raw_internal is True,
     )
 
 
@@ -141,12 +144,16 @@ class _StateDef:
 
 def _parse_state(id: str, raw: object) -> _StateDef:
     obj = _as_object(raw, f"state {id}")
-    parent = obj.get("parent")
-    parent_str = parent if isinstance(parent, str) else None
-    initial = obj.get("initial")
-    initial_str = initial if isinstance(initial, str) else None
-    default = obj.get("default")
-    default_str = default if isinstance(default, str) else None
+
+    def optional_string(field: str) -> str | None:
+        value = obj.get(field)
+        if value is not None and not isinstance(value, str):
+            raise TypeError(f"state {id}: {field} must be a string")
+        return value
+
+    parent_str = optional_string("parent")
+    initial_str = optional_string("initial")
+    default_str = optional_string("default")
 
     if obj.get("run") is not None:
         raise TypeError(
@@ -167,42 +174,41 @@ def _parse_state(id: str, raw: object) -> _StateDef:
     raw_history = obj.get("history")
     if raw_history is not None and not isinstance(raw_history, str):
         raise TypeError(f"state {id}: history must be a string")
+    raw_parallel = obj.get("parallel")
+    if raw_parallel is not None and not isinstance(raw_parallel, bool):
+        raise TypeError(f"state {id}: parallel must be a boolean")
 
     if isinstance(raw_history, str):
         if raw_history not in (_HISTORY_SHALLOW, _HISTORY_DEEP):
             raise TypeError(f"state {id}: unknown history kind `{raw_history}`")
-        kind = "history"
+        inferred_kind = "history"
         history = raw_history
-    elif obj.get("parallel") is True:
-        kind = "parallel"
-        history = None
-    elif obj.get("kind") == "final":
-        kind = "final"
+    elif raw_parallel is True:
+        inferred_kind = "parallel"
         history = None
     elif initial_str is not None:
-        kind = "compound"
+        inferred_kind = "compound"
         history = None
     else:
-        # **Inference from SILENCE, which is a different fact from an unknown
-        # value.** By the time control reaches here `kind` is either absent or a
-        # member of `_STATE_KINDS` — an unrecognised value was refused above —
-        # so this arm reads only the markers the object carries (`history`,
-        # `parallel: true`, `kind: "final"`, `initial`) and falls back to the
-        # leaf case. That is what `statechart.json` documents for an omitted
-        # `kind`: a state with no children and no initial child is atomic.
-        #
-        # The remaining leniency is narrower than it looks: an unrecognised
-        # STRUCTURAL MARKER — an extra key, not a `kind` value — still lands
-        # here and makes the state a LEAF.
-        # `_enter_subtree` will not descend into it and `is_leaf` reports True,
-        # so the chart runs with that subtree collapsed rather than refusing to
-        # load. Every *closed* vocabulary in this parser fails closed: an
-        # unknown `kind` and an unknown `history` value both raise above, and
-        # `_parse_transition` rejects unknown transition fields.
-        #
-        # Pinned by `tests/test_library_leniency.py`.
-        kind = "atomic"
+        inferred_kind = "atomic"
         history = None
+
+    if raw_kind == "final":
+        if inferred_kind != "atomic":
+            raise TypeError(
+                f"state {id}: declared kind `final` contradicts structural "
+                f"kind `{inferred_kind}`"
+            )
+        kind = "final"
+    elif raw_kind is not None:
+        if raw_kind != inferred_kind:
+            raise TypeError(
+                f"state {id}: declared kind `{raw_kind}` contradicts "
+                f"structural kind `{inferred_kind}`"
+            )
+        kind = inferred_kind
+    else:
+        kind = inferred_kind
 
     transitions: dict[str, _Transition] = {}
     raw_on = obj.get("on")
@@ -276,6 +282,26 @@ class ChartDef:
             order[sid] = idx
             states[sid] = _parse_state(sid, raw)
 
+        top_initial = cast("str", obj["initial"])
+        if top_initial not in states:
+            raise TypeError(f"chart.initial names undeclared state `{top_initial}`")
+        for sid, defn in states.items():
+            for field, target in (
+                ("parent", defn.parent),
+                ("initial", defn.initial),
+                ("default", defn.default),
+            ):
+                if target is not None and target not in states:
+                    raise TypeError(
+                        f"state {sid}: {field} names undeclared state `{target}`"
+                    )
+            for event, transition in defn.transitions.items():
+                if transition.target not in states:
+                    raise TypeError(
+                        f"state {sid}: transition {event} targets undeclared "
+                        f"state `{transition.target}`"
+                    )
+
         children: dict[str, list[str]] = {}
         root: str | None = None
         for defn in states.values():
@@ -296,29 +322,11 @@ class ChartDef:
         return ChartDef(states, children, order, depth, root)
 
     def kind(self, id: str) -> str:
-        """The kind of state ``id``, or ``"atomic"`` when ``id`` is not declared.
-
-        **Deliberate leniency.** Transition targets are free-form strings on the
-        wire and are never cross-checked against the state table at parse time,
-        so a chart authored against a larger state set — or one whose target
-        names a state a later revision adds — can reference an id this
-        ``ChartDef`` does not hold. Treating an undeclared id as an atomic leaf
-        keeps the machine running: the transition fires, the id enters the
-        configuration, and it simply has no children to descend into and no
-        entry/exit actions to run (`_enter_subtree` returns early on the same
-        missing lookup). Refusing instead would turn one unknown target into a
-        dead chart.
-
-        Consequence, stated: a *typo* in a target id is indistinguishable from a
-        forward reference and is accepted the same way, landing the machine in a
-        state with no behaviour rather than reporting the typo. Callers that
-        need the stricter reading should validate targets against
-        :attr:`states` before running the chart.
-
-        Pinned by ``tests/test_library_leniency.py``.
-        """
+        """The kind of a declared state id."""
         defn = self.states.get(id)
-        return defn.kind if defn is not None else "atomic"
+        if defn is None:
+            raise KeyError(f"unknown state in this chart: {id}")
+        return defn.kind
 
     def is_leaf(self, id: str) -> bool:
         return self.kind(id) in ("atomic", "final")

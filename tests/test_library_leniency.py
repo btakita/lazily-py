@@ -184,25 +184,18 @@ def test_pin_statechart_unrecognised_structural_marker_reads_as_atomic() -> None
         )
 
 
-def test_pin_statechart_undeclared_transition_target_reads_as_atomic() -> None:
-    """``ChartDef.kind`` — a transition target that names no declared state is
-    treated as an atomic leaf, so one unknown target does not kill the chart.
-    """
-    defn = ChartDef.from_chart(
-        {
-            "initial": "root",
-            "states": {
-                "root": {"initial": "a"},
-                "a": {"parent": "root", "on": {"GO": "never_declared"}},
-            },
-        }
-    )
-    assert defn.kind("never_declared") == "atomic"
-
-    ctx: dict = {}
-    chart = StateChart(ctx, defn)
-    assert chart.send("GO") is True, "the transition fires rather than raising"
-    assert "never_declared" in chart.configuration()
+def test_statechart_undeclared_transition_target_fails_closed() -> None:
+    """A target outside the declared state set is rejected before execution."""
+    with pytest.raises(TypeError, match="undeclared state"):
+        ChartDef.from_chart(
+            {
+                "initial": "root",
+                "states": {
+                    "root": {"initial": "a"},
+                    "a": {"parent": "root", "on": {"GO": "never_declared"}},
+                },
+            }
+        )
 
 
 def test_pin_statechart_unknown_guard_name_denies() -> None:
@@ -348,18 +341,31 @@ def test_reject_unknown_statechart_state_kind() -> None:
             }
         )
 
-    # Every member of the closed vocabulary still loads, so the check is a
-    # membership test rather than a blanket refusal of the field.
-    for kind in ("atomic", "compound", "parallel", "history", "final"):
-        ChartDef.from_chart(
-            {
-                "initial": "root",
-                "states": {
-                    "root": {"initial": "leaf"},
-                    "leaf": {"parent": "root", "kind": kind},
-                },
-            }
-        )
+    # Every member of the closed vocabulary still loads when its declaration
+    # agrees with the state's structure.
+    for chart in (
+        {"initial": "leaf", "states": {"leaf": {"kind": "atomic"}}},
+        {
+            "initial": "root",
+            "states": {
+                "root": {"kind": "compound", "initial": "leaf"},
+                "leaf": {"parent": "root"},
+            },
+        },
+        {
+            "initial": "root",
+            "states": {
+                "root": {"kind": "parallel", "parallel": True},
+                "leaf": {"parent": "root"},
+            },
+        },
+        {
+            "initial": "history",
+            "states": {"history": {"kind": "history", "history": "shallow"}},
+        },
+        {"initial": "done", "states": {"done": {"kind": "final"}}},
+    ):
+        ChartDef.from_chart(chart)
 
 
 @dataclass(frozen=True)
