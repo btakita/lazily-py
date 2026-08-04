@@ -27,6 +27,7 @@ __all__ = [
     "SHM_BLOB_HEADER_LEN",
     "BlobBackendKind",
     "CapabilityHandshake",
+    "CapabilityNegotiationResult",
     "CausalReceipt",
     "CausalReceipts",
     "CrdtOp",
@@ -1627,6 +1628,34 @@ PROTOCOL_MAJOR_VERSION = 1
 
 
 @dataclass(frozen=True, slots=True)
+class CapabilityNegotiationResult:
+    """Result of reconciling two capability handshakes.
+
+    Compatible results retain the effective frame ceiling and fragmentation
+    capability. Incompatible results name the canonical wire field that failed.
+    """
+
+    compatible: bool
+    max_frame_size: int | None = None
+    fragmentation_supported: bool | None = None
+    field: str | None = None
+
+    @classmethod
+    def success(
+        cls, max_frame_size: int, fragmentation_supported: bool
+    ) -> CapabilityNegotiationResult:
+        return cls(
+            compatible=True,
+            max_frame_size=max_frame_size,
+            fragmentation_supported=fragmentation_supported,
+        )
+
+    @classmethod
+    def failure(cls, field: str) -> CapabilityNegotiationResult:
+        return cls(compatible=False, field=field)
+
+
+@dataclass(frozen=True, slots=True)
 class CapabilityHandshake:
     """Compatibility handshake exchanged before any graph state flows.
 
@@ -1687,25 +1716,47 @@ class CapabilityHandshake:
         """Whether this peer advertises ``feature``."""
         return feature in self.features
 
-    def is_compatible_with(self, other: CapabilityHandshake) -> bool:
-        """Whether this handshake is mutually compatible with ``other``.
+    def negotiate_with(self, other: CapabilityHandshake) -> CapabilityNegotiationResult:
+        """Negotiate a session with ``other`` and retain its effective limits.
 
         Peers are compatible when both advertise :data:`PROTOCOL_ID`, both
         advertise :data:`PROTOCOL_MAJOR_VERSION`, their major versions and
-        codecs agree, and both require ordered reliable delivery. Feature
-        negotiation is caller-driven via :attr:`features` /
-        :meth:`has_feature`.
+        codecs agree, both require ordered reliable delivery, both frame
+        ceilings are positive, and both name the same non-empty session.
+
+        Frame size reconciles to the smaller receive ceiling. Fragmentation is
+        available only when both peers advertise support. Feature negotiation
+        remains caller-driven via :attr:`features` / :meth:`has_feature`.
         """
-        return (
-            self.protocol_id == PROTOCOL_ID
-            and other.protocol_id == PROTOCOL_ID
-            and self.protocol_major_version == PROTOCOL_MAJOR_VERSION
-            and other.protocol_major_version == PROTOCOL_MAJOR_VERSION
-            and self.protocol_major_version == other.protocol_major_version
-            and self.codec == other.codec
-            and self.ordered_reliable
-            and other.ordered_reliable
+        if self.protocol_id != PROTOCOL_ID or other.protocol_id != PROTOCOL_ID:
+            return CapabilityNegotiationResult.failure("protocol_id")
+        if (
+            self.protocol_major_version != PROTOCOL_MAJOR_VERSION
+            or other.protocol_major_version != PROTOCOL_MAJOR_VERSION
+            or self.protocol_major_version != other.protocol_major_version
+        ):
+            return CapabilityNegotiationResult.failure("protocol_major_version")
+        if self.codec != other.codec:
+            return CapabilityNegotiationResult.failure("codec")
+        if not self.ordered_reliable or not other.ordered_reliable:
+            return CapabilityNegotiationResult.failure("ordered_reliable")
+        if self.max_frame_size <= 0 or other.max_frame_size <= 0:
+            return CapabilityNegotiationResult.failure("max_frame_size")
+        if (
+            not self.session_id
+            or not other.session_id
+            or self.session_id != other.session_id
+        ):
+            return CapabilityNegotiationResult.failure("session_id")
+
+        return CapabilityNegotiationResult.success(
+            min(self.max_frame_size, other.max_frame_size),
+            self.fragmentation_supported and other.fragmentation_supported,
         )
+
+    def is_compatible_with(self, other: CapabilityHandshake) -> bool:
+        """Compatibility-only wrapper around :meth:`negotiate_with`."""
+        return self.negotiate_with(other).compatible
 
     def to_wire(self) -> dict[str, Any]:
         return {

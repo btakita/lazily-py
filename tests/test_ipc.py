@@ -612,9 +612,15 @@ def test_capability_handshake_compatibility() -> None:
     a = CapabilityHandshake.new(1, "s")
     b = CapabilityHandshake.new(2, "s")
     assert a.is_compatible_with(b)
+    negotiated = a.negotiate_with(b)
+    assert negotiated.compatible is True
+    assert negotiated.max_frame_size == 1_048_576
+    assert negotiated.fragmentation_supported is False
 
     # codec mismatch fails closed
-    assert not a.is_compatible_with(b.with_codec("postcard"))
+    codec_error = a.negotiate_with(b.with_codec("postcard"))
+    assert codec_error.compatible is False
+    assert codec_error.field == "codec"
     # unordered fails closed
     assert not a.is_compatible_with(
         CapabilityHandshake(
@@ -629,3 +635,39 @@ def test_capability_handshake_compatibility() -> None:
     )
     # wrong protocol id fails closed
     assert not a.is_compatible_with(replace(a, protocol_id="not-lazily"))
+
+
+def test_capability_handshake_negotiates_frame_limits() -> None:
+    local = (
+        CapabilityHandshake.new(1, "graph")
+        .with_max_frame_size(16 * 1024 * 1024)
+        .with_fragmentation(True)
+    )
+    remote = CapabilityHandshake.new(2, "graph").with_max_frame_size(1024)
+    negotiated = local.negotiate_with(remote)
+    assert negotiated.compatible is True
+    assert negotiated.max_frame_size == 1024
+    assert negotiated.fragmentation_supported is False
+
+    both_fragment = remote.with_fragmentation(True)
+    negotiated = local.negotiate_with(both_fragment)
+    assert negotiated.compatible is True
+    assert negotiated.fragmentation_supported is True
+
+
+def test_capability_handshake_rejects_zero_ceiling_and_invalid_session() -> None:
+    valid = CapabilityHandshake.new(1, "graph")
+
+    zero = valid.negotiate_with(
+        CapabilityHandshake.new(2, "graph").with_max_frame_size(0)
+    )
+    assert zero.compatible is False
+    assert zero.field == "max_frame_size"
+
+    mismatch = valid.negotiate_with(CapabilityHandshake.new(2, "other"))
+    assert mismatch.compatible is False
+    assert mismatch.field == "session_id"
+
+    empty = valid.negotiate_with(CapabilityHandshake.new(2, ""))
+    assert empty.compatible is False
+    assert empty.field == "session_id"
