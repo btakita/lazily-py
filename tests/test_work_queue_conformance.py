@@ -1,6 +1,20 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from lazily import Slot, WorkQueueCell, WorkQueueDeadLetterReason
+
+
+_SPEC = (
+    Path(__file__).resolve().parents[2] / "lazily-spec" / "conformance" / "collections"
+)
+
+
+def _work_queue_config(name: str) -> tuple[int, int]:
+    fixture = json.loads((_SPEC / name).read_text())
+    initial = fixture["initial"]
+    return initial["visibility_timeout"], initial["max_deliveries"]
 
 
 def _materialize(queue: WorkQueueCell[str]) -> None:
@@ -34,7 +48,14 @@ def _assert_invalidated(
 
 def test_competing_delivery_fixture() -> None:
     ctx: dict = {}
-    queue = WorkQueueCell[str](ctx, visibility_timeout=10, max_deliveries=3)
+    visibility_timeout, max_deliveries = _work_queue_config(
+        "workqueue_competing_delivery.json"
+    )
+    queue = WorkQueueCell[str](
+        ctx,
+        visibility_timeout=visibility_timeout,
+        max_deliveries=max_deliveries,
+    )
     _materialize(queue)
 
     assert queue.push("a") == 0
@@ -87,7 +108,14 @@ def test_competing_delivery_fixture() -> None:
 
 def test_visibility_timeout_and_dead_letter_fixture() -> None:
     ctx: dict = {}
-    queue = WorkQueueCell[str](ctx, visibility_timeout=10, max_deliveries=2)
+    visibility_timeout, max_deliveries = _work_queue_config(
+        "workqueue_lease_deadletter.json"
+    )
+    queue = WorkQueueCell[str](
+        ctx,
+        visibility_timeout=visibility_timeout,
+        max_deliveries=max_deliveries,
+    )
     _materialize(queue)
     queue.push("poison")
     _assert_invalidated(ctx, queue, pending_len=True, is_empty=True)

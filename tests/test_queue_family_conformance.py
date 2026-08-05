@@ -383,14 +383,6 @@ def _run_topic(flavor: type[_Flavor], fixture_name: str) -> tuple[int, int]:
     return len(steps), matrices
 
 
-def _work_queue_config(fixture_name: str) -> tuple[int, int]:
-    if fixture_name == "workqueue_competing_delivery.json":
-        return 10, 3
-    if fixture_name == "workqueue_lease_deadletter.json":
-        return 10, 2
-    raise AssertionError(f"unknown work-queue fixture {fixture_name!r}")
-
-
 def _work_queue_readers(ctx: dict, queue: Any) -> dict[str, _Counter]:
     handles = queue.reader_handles()
     return {
@@ -443,12 +435,18 @@ def _assert_work_state(where: str, queue: Any, expected: dict[str, Any]) -> None
 
 def _run_work_queue(flavor: type[_Flavor], fixture_name: str) -> tuple[int, int]:
     fixture = _load(fixture_name)
-    assert fixture["initial"] == {
-        "pending": [],
-        "in_flight": [],
-        "dead_letters": [],
-    }, f"{fixture_name}: unsupported non-empty initial work queue"
-    visibility_timeout, max_deliveries = _work_queue_config(fixture_name)
+    initial = fixture["initial"]
+    assert initial["pending"] == [], (
+        f"{fixture_name}: unsupported non-empty initial.pending"
+    )
+    assert initial["in_flight"] == [], (
+        f"{fixture_name}: unsupported non-empty initial.in_flight"
+    )
+    assert initial["dead_letters"] == [], (
+        f"{fixture_name}: unsupported non-empty initial.dead_letters"
+    )
+    visibility_timeout = initial["visibility_timeout"]
+    max_deliveries = initial["max_deliveries"]
     ctx: dict = {}
     queue = flavor.work_queue_cls(
         ctx,
