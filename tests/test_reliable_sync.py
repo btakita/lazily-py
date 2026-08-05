@@ -637,10 +637,18 @@ def test_liveness_derived_aggregate_converges_under_retry() -> None:
     )
     assert_key(expect, "redeliver_applied_count", applied_again)
 
-    # Per-doc isolation: each doc's open entry is its own OrSet, so one doc's
-    # ops never move another's.
-    docs = {key.split("/")[0] for key in r1_open}
-    assert_key(expect, "per_doc_isolation", len(docs) == len(r1_open))
+    # Per-doc isolation: multiple live processes may hold the same document
+    # open, but the derived aggregate must still emit that document once.
+    open_docs = [key.split("/")[0] for key in r1_open]
+    docs = set(open_docs)
+    has_multi_process_document = len(docs) < len(open_docs)
+    assert_key(
+        expect,
+        "per_doc_isolation",
+        has_multi_process_document
+        and live == sorted(docs)
+        and len(live) == len(set(live)),
+    )
 
 
 # ---------------------------------------------------------------------------

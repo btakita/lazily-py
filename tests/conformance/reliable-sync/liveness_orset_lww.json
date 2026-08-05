@@ -60,12 +60,14 @@
     {
       "id": "derived_live_doc_aggregate_converges_under_retry",
       "name": "derived_live_doc_aggregate_converges_under_retry",
-      "description": "Two replicas exchange the same liveness ops in different orders and with re-delivery; the derived per-doc live aggregate converges identically (semilattice join). Re-ingesting a seen op applies 0 new ops.",
+      "description": "Two replicas exchange the same liveness ops in different orders and with re-delivery; the derived per-doc live aggregate converges identically (semilattice join). docA is open through two live processes, so the aggregate must still emit it once. Re-ingesting a seen op applies 0 new ops.",
       "replicas": ["r1", "r2"],
       "ops": [
         { "register_kind": "orset", "key": "docA/pid100", "op": "add", "tag": "a1", "stamp": { "wall_time": 40, "logical": 0, "peer": 1 } },
         { "register_kind": "lww",   "key": "alive/pid100", "value": true, "stamp": { "wall_time": 41, "logical": 0, "peer": 1 } },
-        { "register_kind": "orset", "key": "docB/pid100", "op": "add", "tag": "b1", "stamp": { "wall_time": 42, "logical": 0, "peer": 1 } }
+        { "register_kind": "orset", "key": "docB/pid100", "op": "add", "tag": "b1", "stamp": { "wall_time": 42, "logical": 0, "peer": 1 } },
+        { "register_kind": "orset", "key": "docA/pid200", "op": "add", "tag": "a2", "stamp": { "wall_time": 43, "logical": 0, "peer": 2 } },
+        { "register_kind": "lww",   "key": "alive/pid200", "value": true, "stamp": { "wall_time": 44, "logical": 0, "peer": 2 } }
       ],
       "reverse_order_equivalent": true,
       "redeliver": true,
