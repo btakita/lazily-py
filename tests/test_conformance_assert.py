@@ -172,7 +172,9 @@ def test_assert_key_with_hands_the_fixture_value_to_the_predicate() -> None:
     other = tracked({"len": 3}, fixture="selftest/with2.json")
     with pytest.raises(AssertionError, match="predicate rejected"):
         assert_key_with(other, "len", lambda want: want == 4)
-    assert not _report("selftest/with2.json")
+    reported = _report("selftest/with2.json")
+    assert reported and "never compared" in reported[0]
+    reset(fixture="selftest/with2.json")
 
 
 # ---------------------------------------------------------------------------

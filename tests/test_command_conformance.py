@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 from conformance_assert import (
     assert_key,
+    assert_key_into,
     assert_key_with,
     instrument,
 )
@@ -87,7 +88,11 @@ def _run_frames_expect(
     proj: CommandProjection, frames: list[dict], expect: dict
 ) -> None:
     terminal_after = (
-        assert_key_with(expect, "terminal_after_frame_index")
+        assert_key_into(
+            expect,
+            "terminal_after_frame_index",
+            lambda fixture_value: fixture_value,
+        )
         if "terminal_after_frame_index" in expect
         else None
     )
@@ -112,7 +117,9 @@ def _run_frames_expect(
         projection = expect.sub("projection")
         image = proj.to_image()
         assert_key(projection, "generation", image.generation)
-        expected_cmds = assert_key_with(projection, "commands")
+        expected_cmds = assert_key_into(
+            projection, "commands", lambda fixture_value: fixture_value
+        )
         assert len(image.commands) == len(expected_cmds)
         for got, exp in zip(image.commands, expected_cmds, strict=True):
             assert got.to_wire() == exp
@@ -190,7 +197,11 @@ def test_terminal_conflict_fail_closed_detail() -> None:
     # The conflict lands on the frame the fixture names, and NOT before it: a
     # reducer that flagged a conflict at frame 1 would still end up "in
     # conflict" without failing closed at the right point.
-    conflict_at = assert_key_with(expect, "conflict_after_frame_index")
+    conflict_at = assert_key_into(
+        expect,
+        "conflict_after_frame_index",
+        lambda fixture_value: fixture_value,
+    )
     for index, frame in enumerate(frames[:conflict_at]):
         _ingest_frame(proj, frame)
         assert not proj.has_conflict(cmd), f"conflict raised early at frame {index}"
@@ -214,7 +225,11 @@ def test_stale_generation_ignored_detail() -> None:
     cmd = _first_command_id(fixture["frames"])
     for i, frame in enumerate(fixture["frames"]):
         status = _ingest_frame(proj, frame)
-        if i in assert_key_with(fixture["expect"], "ignored_frame_indices"):
+        if i in assert_key_into(
+            fixture["expect"],
+            "ignored_frame_indices",
+            lambda fixture_value: fixture_value,
+        ):
             assert status is CommandApplyStatus.STALE_GENERATION
     assert proj.entry(cmd).status is CommandStatus.SUBMITTED
     assert not proj.entry(cmd).terminal
@@ -257,10 +272,18 @@ def test_rpc_call_resolves_only_on_terminal_receipt() -> None:
     client.submit(CommandSubmit.from_wire(submit_wire))
     # Ingest subsequent frames (events + receipt) one at a time.
     for i, frame in enumerate(frames[1:], start=1):
-        if i in assert_key_with(expect, "unresolved_after_frame_indices"):
+        if i in assert_key_into(
+            expect,
+            "unresolved_after_frame_indices",
+            lambda fixture_value: fixture_value,
+        ):
             assert client.poll_call(cmd).kind is CallStateKind.PENDING
         _ingest_frame(client.projection, frame)
-        if i == assert_key_with(expect, "resolves_after_frame_index"):
+        if i == assert_key_into(
+            expect,
+            "resolves_after_frame_index",
+            lambda fixture_value: fixture_value,
+        ):
             state = client.poll_call(cmd)
             assert state.kind is CallStateKind.RESOLVED
             assert state.entry is not None

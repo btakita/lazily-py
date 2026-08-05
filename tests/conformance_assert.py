@@ -795,7 +795,15 @@ def sub_entries(
     """
     child = block.sub(key)
     for name in sorted(child):
-        yield name, assert_key_with(child, name, where=where or f"{key}.{name}")
+        yield (
+            name,
+            assert_key_into(
+                child,
+                name,
+                lambda fixture_value: fixture_value,
+                where=where or f"{key}.{name}",
+            ),
+        )
 
 
 def assert_key_set(
@@ -866,21 +874,16 @@ def assert_key(
 def assert_key_with(
     block: TrackedBlock,
     key: str,
-    check: Callable[[Any], Any] | None = None,
+    check: Callable[[Any], Any],
     where: str = "",
 ) -> Any:
     """Hand the fixture's value for ``key`` to ``check``, marking the key asserted.
 
     For comparisons that are not equality — a tolerance, a set containment, a
     regex, a structural walk. ``check`` may assert internally (returning ``None``)
-    or return a truthy/falsy verdict, which is then asserted. Called without a
-    ``check`` it simply returns the value and books the assertion, for the arms
-    whose comparison is too tangled to express as a lambda; the fixture value
-    still reaches the caller's own check.
+    or return a truthy/falsy verdict, which is then asserted.
     """
-    want = block.mark_asserted(key)
-    if check is None:
-        return want
+    want = block[key]
     verdict = check(want)
     if verdict is not None:
         site = f" ({where})" if where else ""
@@ -888,7 +891,21 @@ def assert_key_with(
             f"{block.fixture} [{block.block}] {key}{site}: predicate rejected "
             f"fixture value {want!r}"
         )
+    block.mark_asserted(key)
     return want
+
+
+def assert_key_into(
+    block: TrackedBlock,
+    key: str,
+    project: Callable[[Any], Any],
+    where: str = "",
+) -> Any:
+    """Project a fixture value for a comparison the caller performs immediately."""
+    want = block[key]
+    projected = project(want)
+    block.mark_asserted(key)
+    return projected
 
 
 def assert_invalidates(

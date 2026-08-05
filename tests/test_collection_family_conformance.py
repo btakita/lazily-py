@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from conformance_assert import assert_key_with, instrument, sub_entries
+from conformance_assert import assert_key_into, assert_key_with, instrument, sub_entries
 
 import lazily
 
@@ -261,7 +261,8 @@ def _replay(flavor: _Flavor, fixture_name: str) -> None:
         matrices += 1
 
         dirty = set(
-            assert_key_with(invalidates, "value") or []
+            assert_key_into(invalidates, "value", lambda fixture_value: fixture_value)
+            or []
             if "value" in invalidates
             else []
         )
@@ -281,7 +282,9 @@ def _replay(flavor: _Flavor, fixture_name: str) -> None:
                 )
 
         want_membership_dirty = bool(
-            assert_key_with(invalidates, "membership")
+            assert_key_into(
+                invalidates, "membership", lambda fixture_value: fixture_value
+            )
             if "membership" in invalidates
             else False
         )
@@ -291,7 +294,9 @@ def _replay(flavor: _Flavor, fixture_name: str) -> None:
         )
 
         want_order_dirty = bool(
-            assert_key_with(invalidates, "order") if "order" in invalidates else False
+            assert_key_into(invalidates, "order", lambda fixture_value: fixture_value)
+            if "order" in invalidates
+            else False
         )
         assert (order() != order_base) is want_order_dirty, (
             f"{where(i)}: order reader invalidation mismatch"

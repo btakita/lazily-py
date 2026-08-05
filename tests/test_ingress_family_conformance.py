@@ -59,7 +59,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conformance_assert import assert_key, assert_key_with, instrument
+from conformance_assert import assert_key, assert_key_into, instrument
 
 import lazily
 
@@ -277,7 +277,12 @@ def _assert_invalidation(
         )
         for kind in READER_KINDS:
             probe = f"{key}.{kind}"
-            want_flag = assert_key_with(want_scope, kind, where=where)
+            want_flag = assert_key_into(
+                want_scope,
+                kind,
+                lambda fixture_value: fixture_value,
+                where=where,
+            )
             invalidated = before[probe] and not after[probe]
             assert invalidated is want_flag, (
                 f"{where}: {probe} invalidation is {invalidated}, expected "
@@ -291,7 +296,12 @@ def _assert_invalidation(
     )
     for channel in RECEIPT_CHANNELS:
         probe = f"receipts.{channel}"
-        want_flag = assert_key_with(receipts, channel, where=where)
+        want_flag = assert_key_into(
+            receipts,
+            channel,
+            lambda fixture_value: fixture_value,
+            where=where,
+        )
         invalidated = before[probe] and not after[probe]
         assert invalidated is want_flag, (
             f"{where}: {probe} invalidation is {invalidated}, expected {want_flag}"

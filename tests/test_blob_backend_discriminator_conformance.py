@@ -67,6 +67,7 @@ from typing import Any
 from conformance_assert import (
     TrackedBlock,
     assert_key,
+    assert_key_into,
     assert_key_with,
     fnv1a64_hex,
     instrument,
@@ -215,7 +216,12 @@ def _assert_backend_vocabulary_is_complete(
     clause does not name is a private extension to a wire vocabulary, which is
     the same interoperability failure pointing the other way.
     """
-    declared = assert_key_with(block, "backends", where="vocabulary completeness")
+    declared = assert_key_into(
+        block,
+        "backends",
+        lambda fixture_value: fixture_value,
+        where="vocabulary completeness",
+    )
     missing = sorted(set(declared) - decoded_backends)
     assert not missing, (
         f"backend(s) {missing} are declared in `assertions.backends` but no accept "
@@ -400,7 +406,11 @@ def test_blob_backend_discriminator_conformance() -> None:
                 # because it mis-parsed `checksum` satisfies a bare is-error
                 # check while implementing none of the clause; only the token in
                 # the message separates the two.
-                token = assert_key_with(expect, "error_names_token")
+                token = assert_key_into(
+                    expect,
+                    "error_names_token",
+                    lambda fixture_value: fixture_value,
+                )
                 assert token in text, (
                     f"{scenario['id']}: the rejection does not name the offending "
                     f"token {token!r} — message was {text!r}"

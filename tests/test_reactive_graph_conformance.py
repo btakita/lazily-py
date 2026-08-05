@@ -72,7 +72,7 @@ from typing import Any
 import pytest
 from conformance_assert import (
     assert_key,
-    assert_key_with,
+    assert_key_into,
     excuse_key,
     instrument,
     sub_entries,
@@ -949,7 +949,7 @@ async def _replay(
             # Reading the key through `assert_key_with` books the assertion: every
             # arm below hands `want` to `check`, which compares it against the
             # model (#lzconsumednotasserted).
-            want = assert_key_with(expect, key)
+            want = assert_key_into(expect, key, lambda fixture_value: fixture_value)
             if key == "note":
                 continue
             if key == "dependents_of":
@@ -1071,7 +1071,12 @@ async def _replay(
         check(
             "after_publish.observed_by",
             report.observation.after_publish_observed,
-            list(assert_key_with(publish, "observed_by") or []),
+            list(
+                assert_key_into(
+                    publish, "observed_by", lambda fixture_value: fixture_value
+                )
+                or []
+            ),
         )
         for node_id, value in sub_entries(publish, "read"):
             got_read = await read_id(node_id)
@@ -1150,7 +1155,11 @@ def _run_corpus(model_cls: Any) -> None:
         # observable, not merely each satisfy `expected` independently.
         tail_block = fixture.get("expected") or {}
         pair = (
-            assert_key_with(tail_block, "observationally_equal")
+            assert_key_into(
+                tail_block,
+                "observationally_equal",
+                lambda fixture_value: fixture_value,
+            )
             if "observationally_equal" in tail_block
             else None
         )
