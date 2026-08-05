@@ -56,6 +56,11 @@ fi
 # fixture named here is already excused a level up and must not also carry scenario
 # excuses.
 KNOWN_UNCOVERED=(
+  # Reactive egress is currently Rust-only; Python has no egress replay runner.
+  "egress/egress_generation_fence.json"
+  "egress/egress_inflight_window.json"
+  "egress/egress_ordered_ack.json"
+  "egress/egress_retry_budget.json"
   # Experimental protobuf-v1 generation is piloted in Rust/Kotlin/TypeScript;
   # Python must negotiate the capability before replaying this typed trace.
   "protobuf/graph_boundary_traces.json"
