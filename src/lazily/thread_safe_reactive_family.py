@@ -31,6 +31,7 @@ from .cell import Cell
 from .collection import (
     _COMPUTED_HANDLE,
     _SOURCE_HANDLE,
+    DependencyAvailability,
     EntryKind,
     MapHandle,
     _HandleKind,
@@ -309,6 +310,42 @@ class ThreadSafeSourceMap[K, V](ThreadSafeReactiveMap[K, V]):
             self._ts.set(handle, value)  # type: ignore[arg-type]
             return
         self.get_or_insert_handle(key, lambda _view, _k: value)
+
+
+class ThreadSafeDependencyMap[K, V](ThreadSafeSourceMap[K, DependencyAvailability[V]]):
+    """Race-free exact-key dependency availability."""
+
+    __slots__ = ()
+
+    def _dependency_handle(
+        self, key: K, initial: DependencyAvailability[V]
+    ) -> Cell[DependencyAvailability[V]]:
+        inserted = False
+        with self._mutex:
+            handle = self._keyed.get(key)
+            if handle is None:
+                candidate = Cell(self._ctx, initial)
+                handle, mutation = self._keyed.insert(key, candidate)
+                inserted = mutation.changed
+        if inserted:
+            self._bump_membership()
+        return handle  # type: ignore[return-value]
+
+    def observe_dependency(self, key: K, ctx: Any = None) -> DependencyAvailability[V]:
+        self._dependency_handle(key, DependencyAvailability.unavailable())
+        value = self.observe(key, ctx)
+        assert value is not None
+        return value
+
+    def publish(self, key: K, value: V) -> None:
+        handle = self._dependency_handle(
+            key, DependencyAvailability.available_value(value)
+        )
+        self._ts.set(handle, DependencyAvailability.available_value(value))
+
+    def unpublish(self, key: K) -> None:
+        handle = self._dependency_handle(key, DependencyAvailability.unavailable())
+        self._ts.set(handle, DependencyAvailability.unavailable())
 
 
 class ThreadSafeComputedMap[K, V](ThreadSafeReactiveMap[K, V]):

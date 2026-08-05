@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import warnings
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from enum import Enum, EnumMeta
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
@@ -59,6 +60,8 @@ if TYPE_CHECKING:
 __all__ = [
     "CellMap",
     "ComputedMap",
+    "DependencyAvailability",
+    "DependencyMap",
     "EntryKind",
     "MapHandle",
     "ReactiveMap",
@@ -68,6 +71,23 @@ __all__ = [
 
 K = TypeVar("K")
 V = TypeVar("V")
+
+
+@dataclass(frozen=True, slots=True)
+class DependencyAvailability[V]:
+    """Stable exact-key dependency state (``#lzdependencyavailability``)."""
+
+    available: bool
+    value: V | None = None
+
+    @classmethod
+    def unavailable(cls) -> DependencyAvailability[V]:
+        return cls(False)
+
+    @classmethod
+    def available_value(cls, value: V) -> DependencyAvailability[V]:
+        return cls(True, value)
+
 
 #: A map entry's reactive handle: an input :class:`Cell` or a derived
 #: storage-sense :class:`~lazily.slot.Slot`.
@@ -504,6 +524,22 @@ class SourceMap[K, V](ReactiveMap[K, V]):
             handle.set(value)  # type: ignore[union-attr]
             return
         self.entry_with(key, lambda: value)
+
+
+class DependencyMap[K, V](SourceMap[K, DependencyAvailability[V]]):
+    """Exact-key availability whose first observation mints one stable source."""
+
+    __slots__ = ()
+
+    def observe_dependency(self, key: K, ctx: Any = None) -> DependencyAvailability[V]:
+        handle = self.entry(key, DependencyAvailability.unavailable())
+        return _reads(self.ctx if ctx is None else ctx).read(handle)
+
+    def publish(self, key: K, value: V) -> None:
+        self.set(key, DependencyAvailability.available_value(value))
+
+    def unpublish(self, key: K) -> None:
+        self.set(key, DependencyAvailability.unavailable())
 
 
 class ComputedMap[K, V](ReactiveMap[K, V]):

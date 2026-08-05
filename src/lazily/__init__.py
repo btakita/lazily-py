@@ -40,6 +40,7 @@ __all__ = [
     "AsyncComputedState",
     "AsyncContext",
     "AsyncContextDisposedError",
+    "AsyncDependencyMap",
     "AsyncEffect",
     "AsyncEffectHandle",
     "AsyncIngressCell",
@@ -120,6 +121,8 @@ __all__ = [
     "Delta",
     "DeltaApplyStatus",
     "DeltaOp",
+    "DependencyAvailability",
+    "DependencyMap",
     "DiscoveryCell",
     "DiscoveryCore",
     "DisposedError",
@@ -314,6 +317,7 @@ __all__ = [
     "ThreadSafeCellMap",
     "ThreadSafeComputedMap",
     "ThreadSafeContext",
+    "ThreadSafeDependencyMap",
     "ThreadSafeIngressCell",
     "ThreadSafeQueueCell",
     "ThreadSafeReactiveMap",
@@ -484,7 +488,12 @@ from .async_context import (
     AsyncTeardownScope,
 )
 from .async_effect import AsyncEffect, EffectEvent, EffectState
-from .async_reactive_family import AsyncComputedMap, AsyncReactiveMap, AsyncSourceMap
+from .async_reactive_family import (
+    AsyncComputedMap,
+    AsyncDependencyMap,
+    AsyncReactiveMap,
+    AsyncSourceMap,
+)
 from .async_slot import AsyncSlot, SlotEvent, SlotState
 from .batch import batch, batch_context, in_batch
 from .benchmarks import Benchmark, BenchmarkResult, run_benchmarks
@@ -497,7 +506,14 @@ from .cell import (
     source,
     source_def,
 )
-from .collection import ComputedMap, EntryKind, ReactiveMap, SourceMap
+from .collection import (
+    ComputedMap,
+    DependencyAvailability,
+    DependencyMap,
+    EntryKind,
+    ReactiveMap,
+    SourceMap,
+)
 from .command import (
     COMMAND_PLANE_FEATURE,
     CallState,
@@ -833,6 +849,7 @@ from .textcrdt import ROOT, OpId, TextCrdt, TextElement, TextOp
 from .thread_safe import ThreadSafeContext
 from .thread_safe_reactive_family import (
     ThreadSafeComputedMap,
+    ThreadSafeDependencyMap,
     ThreadSafeReactiveMap,
     ThreadSafeSourceMap,
 )

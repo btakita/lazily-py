@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from ._keyed_order import KeyedOrder, MapMove
 from .async_slot import AsyncSlot
 from .cell import Cell
-from .collection import EntryKind, _reads
+from .collection import DependencyAvailability, EntryKind, _reads
 
 
 if TYPE_CHECKING:
@@ -287,6 +287,26 @@ class AsyncSourceMap[K, V](AsyncReactiveMap[K, V]):
             handle.set(value)  # type: ignore[union-attr]
             return
         self._mint(key, lambda _view, _k: value)
+
+
+class AsyncDependencyMap[K, V](AsyncSourceMap[K, DependencyAvailability[V]]):
+    """Async-flavor exact-key dependency availability."""
+
+    __slots__ = ()
+
+    def observe_dependency(self, key: K, ctx: Any = None) -> DependencyAvailability[V]:
+        handle = self._mint(
+            key, lambda _view, _key: DependencyAvailability.unavailable()
+        )
+        if ctx is not None:
+            return ctx.get(handle)  # type: ignore[arg-type, return-value]
+        return handle.value  # type: ignore[union-attr]
+
+    def publish(self, key: K, value: V) -> None:
+        self.set(key, DependencyAvailability.available_value(value))
+
+    def unpublish(self, key: K) -> None:
+        self.set(key, DependencyAvailability.unavailable())
 
 
 class AsyncComputedMap[K, V](AsyncReactiveMap[K, V]):

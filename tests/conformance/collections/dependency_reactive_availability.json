@@ -1,0 +1,71 @@
+{
+  "description": "Exact-key dependency availability. Observation before publication materializes one stable Unavailable source; only publication for that key invalidates its consumers; unpublish and republish preserve identity.",
+  "kind": "Collection",
+  "model": "DependencyMap",
+  "key": "wanted",
+  "steps": [
+    {
+      "op": { "type": "observe_dependency", "key": "wanted" },
+      "expected": {
+        "state": "Unavailable",
+        "recomputes": 1,
+        "present_count": 1,
+        "identity": "wanted-1"
+      }
+    },
+    {
+      "op": { "type": "observe_dependency", "key": "wanted" },
+      "expected": {
+        "state": "Unavailable",
+        "recomputes": 1,
+        "present_count": 1,
+        "identity": "wanted-1"
+      }
+    },
+    {
+      "op": { "type": "publish", "key": "other", "value": 9 },
+      "expected": {
+        "state": "Unavailable",
+        "recomputes": 1,
+        "present_count": 2,
+        "identity": "wanted-1"
+      }
+    },
+    {
+      "op": { "type": "publish", "key": "wanted", "value": 1 },
+      "expected": {
+        "state": { "Available": 1 },
+        "recomputes": 2,
+        "present_count": 2,
+        "identity": "wanted-1"
+      }
+    },
+    {
+      "op": { "type": "publish", "key": "wanted", "value": 2 },
+      "expected": {
+        "state": { "Available": 2 },
+        "recomputes": 3,
+        "present_count": 2,
+        "identity": "wanted-1"
+      }
+    },
+    {
+      "op": { "type": "unpublish", "key": "wanted" },
+      "expected": {
+        "state": "Unavailable",
+        "recomputes": 4,
+        "present_count": 2,
+        "identity": "wanted-1"
+      }
+    },
+    {
+      "op": { "type": "publish", "key": "wanted", "value": 3 },
+      "expected": {
+        "state": { "Available": 3 },
+        "recomputes": 5,
+        "present_count": 2,
+        "identity": "wanted-1"
+      }
+    }
+  ]
+}
