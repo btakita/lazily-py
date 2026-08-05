@@ -56,10 +56,15 @@ fi
 # fixture named here is already excused a level up and must not also carry scenario
 # excuses.
 KNOWN_UNCOVERED=(
+  # Experimental protobuf-v1 generation is piloted in Rust/Kotlin/TypeScript;
+  # Python must negotiate the capability before replaying this typed trace.
+  "protobuf/graph_boundary_traces.json"
   "agent-doc/delta_agent_doc_state.json"
   "agent-doc/snapshot_agent_doc_state.json"
   "reliable-sync/coalesce_bounds_outbox.json"
   "reliable-sync/liveness_lease_eviction.json"
+  # The canonical journal-decoder trace has no Python replay runner yet.
+  "reliable-sync/outbox_journal_decode.json"
 )
 
 MANIFEST="${LAZILY_CONFORMANCE_MANIFEST:-build/conformance-fixtures-loaded.txt}"
