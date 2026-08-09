@@ -18,10 +18,14 @@ bindings, so all implementations stay byte-compatible on the compute invariants.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from conformance_assert import assert_invalidates, assert_key, instrument
+from conformance_assert import (
+    assert_invalidates,
+    assert_key,
+    corpus_subdir,
+    instrument,
+)
 
 from lazily import Slot
 from lazily.temporal import CronCell, DeadlineCell, IntervalCell, TimerCell
@@ -31,7 +35,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 
-_SPEC = Path(__file__).resolve().parents[2] / "lazily-spec" / "conformance" / "temporal"
+_SPEC = corpus_subdir("temporal")
 
 
 def _load(rel: str) -> dict:

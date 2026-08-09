@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from conformance_assert import assert_key, instrument
+from conformance_assert import assert_key, corpus_fixture, instrument
 
 from lazily.signaling import (
     PermissionMode,
@@ -26,13 +26,10 @@ from lazily.signaling import (
 
 
 _LOCAL = Path(__file__).resolve().parent / "conformance"
-_SPEC = Path(__file__).resolve().parents[2] / "lazily-spec" / "conformance"
 
 
 def _load(rel: str) -> dict:
-    path = _SPEC / rel
-    if not path.exists():
-        path = _LOCAL / rel
+    path = corpus_fixture(rel, _LOCAL / rel)
     return instrument(json.loads(path.read_text()), name=rel)
 
 

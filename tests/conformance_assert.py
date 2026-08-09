@@ -227,6 +227,7 @@ from typing import Any
 
 __all__ = [
     "BLOCK_KEYS",
+    "CORPUS_DIR_ENV",
     "PROSE_DECLARATION_KEY",
     "PROSE_KEYS",
     "SCENARIO_EXCUSES",
@@ -239,6 +240,10 @@ __all__ = [
     "block_bind_failures",
     "consumption_failures",
     "corpus_dir",
+    "corpus_fixture",
+    "corpus_override",
+    "corpus_path",
+    "corpus_subdir",
     "declared_block_count",
     "discharged_prose",
     "excuse_key",
@@ -1543,17 +1548,101 @@ def replayed_scenarios() -> dict[str, set[str]]:
     return {fixture: set(ids) for fixture, ids in _REPLAYED.items()}
 
 
+#: The environment variable that repoints every conformance runner — and
+#: ``scripts/check-conformance-coverage.sh`` — at a scratch copy of the corpus.
+#: Never edit the shared ``lazily-spec`` checkout in place: nine bindings read it.
+CORPUS_DIR_ENV = "LAZILY_SPEC_CONFORMANCE_DIR"
+
+
+def corpus_override() -> str | None:
+    """The explicitly-set corpus override, or ``None`` when it is unset/empty.
+
+    Callers need the *distinction*, not just the resolved path: an override that
+    is set is a probe pointing the suite somewhere on purpose, and every "fall
+    back to the vendored copy" / "skip, the sibling is missing" branch in this
+    repo has to become a hard failure under it (``#lzoverrideallrunners``).
+    """
+    value = os.environ.get(CORPUS_DIR_ENV)
+    return value if value else None
+
+
 def corpus_dir() -> Path:
     """Locate the canonical corpus, honouring ``LAZILY_SPEC_CONFORMANCE_DIR``.
 
     The same override ``scripts/check-conformance-coverage.sh`` reads, so a
     scratch copy of the corpus (never edit the shared one in place — it is shared
     by all nine bindings) moves both guards together.
+
+    An override that is set but does not name a readable directory FAILS CLOSED.
+    Silently falling back to the sibling checkout is what let a perturbation probe
+    point the coverage guard at a scratch copy while the runners kept replaying
+    unperturbed bytes, and report green (``#lzoverrideallrunners``).
     """
-    override = os.environ.get("LAZILY_SPEC_CONFORMANCE_DIR")
+    override = corpus_override()
     if override:
-        return Path(override)
+        root = Path(override)
+        if not root.is_dir():
+            raise RuntimeError(
+                f"{CORPUS_DIR_ENV}={override!r} does not name a readable directory. "
+                f"The override is set, so this is a hard failure rather than a "
+                f"fallback to the sibling checkout: a run that quietly replays the "
+                f"canonical corpus while the guard reads a scratch copy reports green "
+                f"over bytes nobody perturbed (#lzoverrideallrunners)."
+            )
+        return root
     return Path(__file__).resolve().parents[2] / "lazily-spec" / "conformance"
+
+
+def corpus_path(*parts: str) -> Path:
+    """A corpus-relative path, resolved through :func:`corpus_dir`.
+
+    The single seam every runner joins against. No test module computes
+    ``../lazily-spec/conformance`` itself: a module that does is invisible to the
+    override, and the suite and the coverage guard auditing it end up reading two
+    different corpora.
+    """
+    return corpus_dir().joinpath(*parts)
+
+
+def corpus_subdir(*parts: str) -> Path:
+    """A corpus SUBDIRECTORY (family) a runner replays.
+
+    Under an explicit override the directory must exist. Without one the path is
+    returned as-is, so a checkout without the ``lazily-spec`` sibling keeps
+    skipping exactly as before — but a probe pointing at a partial scratch copy
+    fails loudly instead of skipping its way to green.
+    """
+    path = corpus_path(*parts)
+    if not path.is_dir() and corpus_override() is not None:
+        raise AssertionError(
+            f"{CORPUS_DIR_ENV} is set, but {path} is not a directory. A corpus copy "
+            f"missing a family is a broken probe; skipping past it is the vacuous "
+            f"green the override exists to expose (#lzoverrideallrunners)."
+        )
+    return path
+
+
+def corpus_fixture(name: str, fallback: Path | None = None) -> Path:
+    """The path a runner should load ``name`` from.
+
+    ``fallback`` is this binding's vendored ``tests/conformance/`` copy, which
+    keeps standalone CI self-contained when the sibling checkout is absent. It is
+    only ever reachable with the override UNSET — under an override a missing
+    fixture is a hard error, never unperturbed vendored bytes.
+    """
+    path = corpus_path(name)
+    if path.exists():
+        return path
+    if corpus_override() is not None:
+        raise AssertionError(
+            f"{CORPUS_DIR_ENV} is set, but the corpus copy has no {name!r} "
+            f"(looked at {path}). Falling back to the vendored tests/conformance "
+            f"copy here would replay unperturbed bytes and report green "
+            f"(#lzoverrideallrunners)."
+        )
+    if fallback is not None:
+        return fallback
+    return path
 
 
 def _disk_scenarios(path: Path) -> tuple[list[str], list[str]] | None:

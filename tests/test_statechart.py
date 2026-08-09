@@ -11,17 +11,14 @@ statechart`` and replays it, asserting ``initial_active`` (and
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
-from conformance_assert import instrument
+from conformance_assert import corpus_subdir, instrument
 
 from lazily import ChartDef, Slot, StateChart
 
 
-_SPEC_FIXTURES = (
-    Path(__file__).resolve().parents[2] / "lazily-spec" / "conformance" / "statechart"
-)
+_SPEC_FIXTURES = corpus_subdir("statechart")
 
 FIXTURES = [
     "flat_cycle.json",

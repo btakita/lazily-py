@@ -15,12 +15,12 @@ all implementations stay byte-compatible on the compute invariants.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 
 from conformance_assert import (
     assert_invalidates,
     assert_key,
+    corpus_subdir,
     instrument,
 )
 
@@ -28,7 +28,7 @@ from lazily import Slot
 from lazily.presence import AwarenessCell, EphemeralCell, PresenceCell
 
 
-_SPEC = Path(__file__).resolve().parents[2] / "lazily-spec" / "conformance" / "presence"
+_SPEC = corpus_subdir("presence")
 
 
 def _load(rel: str) -> dict:

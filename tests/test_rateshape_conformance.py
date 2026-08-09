@@ -17,10 +17,14 @@ invariants.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from conformance_assert import assert_invalidates, assert_key, instrument
+from conformance_assert import (
+    assert_invalidates,
+    assert_key,
+    corpus_subdir,
+    instrument,
+)
 
 
 if TYPE_CHECKING:
@@ -38,9 +42,7 @@ from lazily.rateshape import (
 )
 
 
-_SPEC = (
-    Path(__file__).resolve().parents[2] / "lazily-spec" / "conformance" / "rateshape"
-)
+_SPEC = corpus_subdir("rateshape")
 
 
 def _load(rel: str) -> dict:

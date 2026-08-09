@@ -17,10 +17,14 @@ compatible on the compute invariants.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 
-from conformance_assert import assert_invalidates, assert_key, instrument
+from conformance_assert import (
+    assert_invalidates,
+    assert_key,
+    corpus_subdir,
+    instrument,
+)
 
 from lazily import Slot
 from lazily.service import (
@@ -31,7 +35,7 @@ from lazily.service import (
 )
 
 
-_SPEC = Path(__file__).resolve().parents[2] / "lazily-spec" / "conformance" / "service"
+_SPEC = corpus_subdir("service")
 
 
 def _load(rel: str) -> dict:

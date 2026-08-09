@@ -22,7 +22,8 @@ from pathlib import Path
 import pytest
 from conformance_assert import (
     assert_key_with,
-    corpus_dir,
+    corpus_fixture,
+    corpus_subdir,
     instrument,
     reset,
     sub_entries,
@@ -76,7 +77,7 @@ def entry_kind_of(entry: dict) -> EntryKind:
 def _spec_fixtures() -> Path:
     """The canonical materialization corpus, honouring the corpus-dir override.
 
-    Resolved per call through :func:`conformance_assert.corpus_dir` rather than
+    Resolved per call through :func:`conformance_assert.corpus_subdir` rather than
     frozen in a module-level constant, so ``LAZILY_SPEC_CONFORMANCE_DIR`` — the
     same override ``scripts/check-conformance-coverage.sh`` reads — actually
     reaches this runner. With the path hard-coded, a scratch-copy perturbation
@@ -84,12 +85,11 @@ def _spec_fixtures() -> Path:
     sibling checkout, and the vendored ``tests/conformance/`` fallback below made
     that silent: the run stayed green against unperturbed bytes.
     """
-    return corpus_dir() / "materialization"
+    return corpus_subdir("materialization")
 
 
 def load_fixture(name: str) -> dict:
-    spec_path = _spec_fixtures() / name
-    path = spec_path if spec_path.exists() else _LOCAL_FIXTURES / name
+    path = corpus_fixture(f"materialization/{name}", _LOCAL_FIXTURES / name)
     return instrument(json.loads(path.read_text()), name=f"materialization/{name}")
 
 

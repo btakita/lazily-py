@@ -3,11 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import asdict
-from pathlib import Path
 from typing import Any
 
 import pytest
-from conformance_assert import instrument
+from conformance_assert import corpus_subdir, instrument
 from conformance_assert import scenarios as replay_scenarios
 
 from lazily.stdlib import (
@@ -20,7 +19,7 @@ from lazily.stdlib import (
 )
 
 
-SPEC = Path(__file__).resolve().parents[2] / "lazily-spec" / "conformance" / "stdlib"
+SPEC = corpus_subdir("stdlib")
 
 
 def clean(value: object) -> dict[str, Any]:

@@ -25,7 +25,13 @@ import json
 from pathlib import Path
 
 import pytest
-from conformance_assert import TrackedBlock, assert_key, assert_key_with, instrument
+from conformance_assert import (
+    TrackedBlock,
+    assert_key,
+    assert_key_with,
+    corpus_fixture,
+    instrument,
+)
 
 from lazily.ipc import (
     SHM_BLOB_HEADER_LEN,
@@ -46,12 +52,10 @@ from lazily.ipc import (
 
 
 _LOCAL_FIXTURES = Path(__file__).resolve().parent / "conformance"
-_SPEC_FIXTURES = Path(__file__).resolve().parents[2] / "lazily-spec" / "conformance"
 
 
 def load_fixture(name: str) -> dict:
-    spec_path = _SPEC_FIXTURES / name
-    path = spec_path if spec_path.exists() else _LOCAL_FIXTURES / name
+    path = corpus_fixture(name, _LOCAL_FIXTURES / name)
     fixture = instrument(json.loads(path.read_text()), name=name)
     assert fixture["protocol_version"] == 1, (
         f"fixture {name} uses unsupported protocol version"

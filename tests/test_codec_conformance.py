@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING, Any
 from conformance_assert import (
     TrackedBlock,
     assert_key,
+    corpus_fixture,
     instrument,
     prose_key,
     scenarios,
@@ -53,15 +54,13 @@ if TYPE_CHECKING:
 
 
 _LOCAL_FIXTURES = Path(__file__).resolve().parent / "conformance"
-_SPEC_FIXTURES = Path(__file__).resolve().parents[2] / "lazily-spec" / "conformance"
 
 _JSON_FIXTURE = "codec/frame_roundtrip_json.json"
 _MSGPACK_FIXTURE = "codec/frame_roundtrip_msgpack.json"
 
 
 def _load(name: str) -> dict:
-    spec_path = _SPEC_FIXTURES / name
-    path = spec_path if spec_path.exists() else _LOCAL_FIXTURES / name
+    path = corpus_fixture(name, _LOCAL_FIXTURES / name)
     # No `prose=("note",)` here any more. These fixtures DECLARE `note` in
     # `assertions.prose`, and a declared key states an obligation rather than
     # annotating one — the blanket by-name exemption is exactly what would let a

@@ -16,6 +16,7 @@ from typing import Any
 from conformance_assert import (
     assert_key,
     assert_key_with,
+    corpus_fixture,
     instrument,
     scenarios,
     sub_entries,
@@ -38,13 +39,10 @@ from lazily.ipc import IpcValue_Inline
 
 
 _LOCAL = Path(__file__).resolve().parent / "conformance"
-_SPEC = Path(__file__).resolve().parents[2] / "lazily-spec" / "conformance"
 
 
 def _load(rel: str) -> dict:
-    path = _SPEC / rel
-    if not path.exists():
-        path = _LOCAL / rel
+    path = corpus_fixture(rel, _LOCAL / rel)
     return instrument(json.loads(path.read_text()), name=rel)
 
 

@@ -21,6 +21,7 @@ import pytest
 from conformance_assert import (
     assert_key,
     assert_key_with,
+    corpus_subdir,
     instrument,
     scenarios,
     sub_entries,
@@ -39,12 +40,7 @@ from lazily.lossless_tree_crdt import (
 )
 
 
-_SPEC_FIXTURES = (
-    Path(__file__).resolve().parents[2]
-    / "lazily-spec"
-    / "conformance"
-    / "lossless-tree"
-)
+_SPEC_FIXTURES = corpus_subdir("lossless-tree")
 
 
 def _fixture(name: str) -> dict:

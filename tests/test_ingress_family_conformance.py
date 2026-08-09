@@ -59,12 +59,17 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conformance_assert import assert_key, assert_key_into, instrument
+from conformance_assert import (
+    assert_key,
+    assert_key_into,
+    corpus_subdir,
+    instrument,
+)
 
 import lazily
 
 
-_SPEC = Path(__file__).resolve().parents[2] / "lazily-spec" / "conformance" / "ingress"
+_SPEC = corpus_subdir("ingress")
 _SRC = Path(__file__).resolve().parents[1] / "src" / "lazily"
 
 #: Every fixture the ingress corpus ships. Named explicitly rather than globbed:

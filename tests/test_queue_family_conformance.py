@@ -20,6 +20,8 @@ import pytest
 from conformance_assert import (
     assert_key,
     assert_key_set,
+    corpus_fixture,
+    corpus_subdir,
     instrument,
     sub_entries,
 )
@@ -31,9 +33,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 
-_SPEC = (
-    Path(__file__).resolve().parents[2] / "lazily-spec" / "conformance" / "collections"
-)
+_SPEC = corpus_subdir("collections")
 _LOCAL = Path(__file__).resolve().parent / "conformance" / "collections"
 _SRC = Path(__file__).resolve().parents[1] / "src" / "lazily"
 
@@ -102,9 +102,7 @@ LEDGER = (
 
 
 def _load(name: str) -> dict[str, Any]:
-    path = _SPEC / name
-    if not path.exists():
-        path = _LOCAL / name
+    path = corpus_fixture(f"collections/{name}", _LOCAL / name)
     if not path.exists():
         pytest.skip(f"canonical collections fixture not found: {name}")
     return instrument(json.loads(path.read_text()), name=name)

@@ -29,6 +29,7 @@ from conformance_assert import (
     assert_key,
     assert_key_set,
     assert_key_with,
+    corpus_fixture,
     fnv1a64_hex,
     instrument,
     prose_key,
@@ -40,14 +41,12 @@ from lazily.ipc import IpcMessage, NodeState_Payload
 
 
 _LOCAL_FIXTURES = Path(__file__).resolve().parent / "conformance"
-_SPEC_FIXTURES = Path(__file__).resolve().parents[2] / "lazily-spec" / "conformance"
 
 _FIXTURE = "codec/nodeid_exact_range.json"
 
 
 def _load() -> dict:
-    spec_path = _SPEC_FIXTURES / _FIXTURE
-    path = spec_path if spec_path.exists() else _LOCAL_FIXTURES / _FIXTURE
+    path = corpus_fixture(_FIXTURE, _LOCAL_FIXTURES / _FIXTURE)
     fixture = instrument(json.loads(path.read_text()), name=_FIXTURE)
     assert fixture["protocol_version"] == 1
     assert fixture["kind"] == "NodeIdExactRange"

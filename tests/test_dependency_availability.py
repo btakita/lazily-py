@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import json
 import threading
-from pathlib import Path
 
-from conformance_assert import assert_key, instrument
+from conformance_assert import assert_key, corpus_path, instrument
 
 from lazily import (
     AsyncDependencyMap,
@@ -20,10 +19,8 @@ from lazily import (
 def test_exact_key_availability_is_a_value_transition() -> None:
     fixture = instrument(
         json.loads(
-            (
-                Path(__file__).resolve().parents[2]
-                / "lazily-spec/conformance/collections"
-                / "dependency_reactive_availability.json"
+            corpus_path(
+                "collections", "dependency_reactive_availability.json"
             ).read_text()
         ),
         name="collections/dependency_reactive_availability.json",

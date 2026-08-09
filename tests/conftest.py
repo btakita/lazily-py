@@ -21,8 +21,10 @@ import sys
 from pathlib import Path
 
 from conformance_assert import (
+    CORPUS_DIR_ENV,
     block_bind_failures,
     consumption_failures,
+    corpus_dir,
     prose_failures,
     record_declared_blocks,
     scenario_failures,
@@ -30,7 +32,32 @@ from conformance_assert import (
 
 
 _MANIFEST = os.environ.get("LAZILY_CONFORMANCE_MANIFEST")
-_MARKER = os.path.join("lazily-spec", "conformance") + os.sep
+
+
+def _corpus_roots() -> tuple[str, ...]:
+    """The path prefixes that mean "this read came from the corpus".
+
+    Derived from the RESOLVED corpus root — :func:`conformance_assert.corpus_dir`,
+    the same seam the runners join against — rather than from a hard-coded
+    ``lazily-spec/conformance`` literal (``#lzoverrideallrunners``). With the
+    literal, pointing ``LAZILY_SPEC_CONFORMANCE_DIR`` at a scratch directory whose
+    path does not happen to contain that substring silently stopped attribution:
+    the manifest went empty, and the four rungs below — which all reason about the
+    fixtures a run OPENED — reported green over nothing at all. A perturbation
+    probe would then pass while replaying perturbed bytes it never booked.
+
+    Both the ``abspath`` and the ``realpath`` spellings are accepted so a corpus
+    reached through a symlink still attributes.
+    """
+    root = corpus_dir()
+    roots = {os.path.abspath(root), os.path.realpath(root)}
+    return tuple(sorted(candidate + os.sep for candidate in roots))
+
+
+_CORPUS_ROOTS = _corpus_roots()
+#: Cheap pre-filter for the un-normalized path case below: the corpus root's own
+#: last component, which every path under it necessarily carries.
+_CORPUS_LEAF = os.path.basename(_CORPUS_ROOTS[0].rstrip(os.sep))
 _opened: set[str] = set()
 
 
@@ -39,12 +66,23 @@ def _record(path: object) -> str | None:
         text = os.fspath(path)  # type: ignore[arg-type]
     except TypeError:
         return None
-    idx = text.find(_MARKER)
-    if idx == -1:
+    for root in _CORPUS_ROOTS:
+        if text.startswith(root):
+            rel = text[len(root) :].replace(os.sep, "/")
+            _opened.add(rel)
+            return rel
+    # A relative or un-normalized spelling of the same file. Normalizing costs a
+    # `getcwd`, so it is behind a substring pre-filter: every corpus path carries
+    # the corpus root's last component, and nothing else this session opens does.
+    if _CORPUS_LEAF not in text:
         return None
-    rel = text[idx + len(_MARKER) :].replace(os.sep, "/")
-    _opened.add(rel)
-    return rel
+    resolved = os.path.abspath(text)
+    for root in _CORPUS_ROOTS:
+        if resolved.startswith(root):
+            rel = resolved[len(root) :].replace(os.sep, "/")
+            _opened.add(rel)
+            return rel
+    return None
 
 
 # Rung 0 (#lznullformblind): fixtures whose `assertions` blocks have already been
@@ -144,7 +182,7 @@ def pytest_sessionfinish(session, exitstatus) -> None:  # type: ignore[no-untype
             "  assertion-key and scenario-replay guards below had nothing to check and",
             "  would have reported green. Either the lazily-spec sibling is missing or",
             "  every conformance runner skipped. Clone the corpus, or point",
-            "  LAZILY_SPEC_CONFORMANCE_DIR at a copy.",
+            f"  {CORPUS_DIR_ENV} at a copy.",
             "",
         ]
 

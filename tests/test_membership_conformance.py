@@ -15,12 +15,12 @@ transitions in particular.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 
 from conformance_assert import (
     assert_key,
     assert_key_with,
+    corpus_subdir,
     instrument,
     sub_entries,
 )
@@ -32,9 +32,7 @@ from lazily.membership import (
 )
 
 
-_SPEC = (
-    Path(__file__).resolve().parents[2] / "lazily-spec" / "conformance" / "membership"
-)
+_SPEC = corpus_subdir("membership")
 
 
 def _load(rel: str) -> dict:

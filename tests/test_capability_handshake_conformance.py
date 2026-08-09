@@ -5,19 +5,23 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from conformance_assert import TrackedBlock, assert_key, instrument, scenarios
+from conformance_assert import (
+    TrackedBlock,
+    assert_key,
+    corpus_fixture,
+    instrument,
+    scenarios,
+)
 
 from lazily.ipc import CapabilityHandshake
 
 
 _LOCAL_FIXTURES = Path(__file__).resolve().parent / "conformance"
-_SPEC_FIXTURES = Path(__file__).resolve().parents[2] / "lazily-spec" / "conformance"
 _FIXTURE = "codec/capability_handshake.json"
 
 
 def _load() -> dict:
-    spec_path = _SPEC_FIXTURES / _FIXTURE
-    path = spec_path if spec_path.exists() else _LOCAL_FIXTURES / _FIXTURE
+    path = corpus_fixture(_FIXTURE, _LOCAL_FIXTURES / _FIXTURE)
     fixture = instrument(json.loads(path.read_text()), name=_FIXTURE)
     assert fixture["protocol_version"] == 1
     assert fixture["kind"] == "CapabilityHandshake"

@@ -19,6 +19,7 @@ from pathlib import Path
 from conformance_assert import (
     assert_key,
     assert_key_with,
+    corpus_fixture,
     instrument,
     scenarios,
     sub_entries,
@@ -28,14 +29,10 @@ from lazily import CrdtPlaneRuntime, CrdtSync
 
 
 _LOCAL_FIXTURES = Path(__file__).resolve().parent / "conformance" / "familysync"
-_SPEC_FIXTURES = (
-    Path(__file__).resolve().parents[2] / "lazily-spec" / "conformance" / "familysync"
-)
 
 
 def _load_fixture(name: str) -> dict:
-    spec_path = _SPEC_FIXTURES / name
-    path = spec_path if spec_path.exists() else _LOCAL_FIXTURES / name
+    path = corpus_fixture(f"familysync/{name}", _LOCAL_FIXTURES / name)
     return instrument(json.loads(path.read_text()), name=f"familysync/{name}")
 
 

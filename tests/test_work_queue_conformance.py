@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+
+from conformance_assert import corpus_subdir
 
 from lazily import Slot, WorkQueueCell, WorkQueueDeadLetterReason
 
 
-_SPEC = (
-    Path(__file__).resolve().parents[2] / "lazily-spec" / "conformance" / "collections"
-)
+_SPEC = corpus_subdir("collections")
 
 
 def _work_queue_config(name: str) -> tuple[int, int]:

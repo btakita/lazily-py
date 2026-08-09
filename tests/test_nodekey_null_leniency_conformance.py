@@ -39,6 +39,7 @@ from conformance_assert import (
     TrackedBlock,
     assert_key,
     assert_key_with,
+    corpus_fixture,
     fnv1a64_hex,
     instrument,
     prose_key,
@@ -51,7 +52,6 @@ from lazily.msgpack_codec import msgpack_pack, msgpack_unpack
 
 
 _LOCAL_FIXTURES = Path(__file__).resolve().parent / "conformance"
-_SPEC_FIXTURES = Path(__file__).resolve().parents[2] / "lazily-spec" / "conformance"
 
 _FIXTURE = "codec/nodekey_null_leniency.json"
 
@@ -70,8 +70,7 @@ _MSGPACK_KEY_FIELD = bytes([0xA3]) + b"key"
 
 
 def _load() -> dict:
-    spec_path = _SPEC_FIXTURES / _FIXTURE
-    path = spec_path if spec_path.exists() else _LOCAL_FIXTURES / _FIXTURE
+    path = corpus_fixture(_FIXTURE, _LOCAL_FIXTURES / _FIXTURE)
     fixture = instrument(json.loads(path.read_text()), name=_FIXTURE)
     assert fixture["protocol_version"] == 1
     assert fixture["kind"] == "NodeKeyNullLeniency"

@@ -24,6 +24,7 @@ from conformance_assert import (
     assert_key,
     assert_key_into,
     assert_key_with,
+    corpus_subdir,
     instrument,
 )
 from conformance_assert import (
@@ -41,12 +42,7 @@ from lazily.command import (
 from lazily.ipc import CausalReceipts
 
 
-_SPEC_FIXTURES = (
-    Path(__file__).resolve().parents[2]
-    / "lazily-spec"
-    / "conformance"
-    / "message-passing"
-)
+_SPEC_FIXTURES = corpus_subdir("message-passing")
 
 
 def _fixture(name: str) -> dict:

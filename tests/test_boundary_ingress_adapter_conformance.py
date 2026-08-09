@@ -4,19 +4,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
-from conformance_assert import assert_key, instrument, scenarios
+from conformance_assert import assert_key, corpus_path, instrument, scenarios
 
 
-FIXTURE = (
-    Path(__file__).resolve().parents[2]
-    / "lazily-spec"
-    / "conformance"
-    / "ingress"
-    / "boundary_ingress_adapter.json"
-)
+FIXTURE = corpus_path("ingress", "boundary_ingress_adapter.json")
 
 
 @dataclass

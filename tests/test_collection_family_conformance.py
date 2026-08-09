@@ -19,7 +19,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from conformance_assert import assert_key_into, assert_key_with, instrument, sub_entries
+from conformance_assert import (
+    assert_key_into,
+    assert_key_with,
+    corpus_fixture,
+    instrument,
+    sub_entries,
+)
 
 import lazily
 
@@ -29,15 +35,12 @@ if TYPE_CHECKING:
 
 
 _LOCAL = Path(__file__).resolve().parent / "conformance"
-_SPEC = Path(__file__).resolve().parents[2] / "lazily-spec" / "conformance"
 
 _FIXTURES = ("cellmap_atomic_move.json", "cellmap_independence.json")
 
 
 def _load(name: str) -> dict:
-    path = _SPEC / "collections" / name
-    if not path.exists():
-        path = _LOCAL / "collections" / name
+    path = corpus_fixture(f"collections/{name}", _LOCAL / "collections" / name)
     if not path.exists():
         pytest.skip(f"canonical collections fixture not found: {name}")
     return instrument(json.loads(path.read_text()), name=f"collections/{name}")

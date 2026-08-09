@@ -10,18 +10,20 @@ from __future__ import annotations
 
 import importlib.util
 import json
-from pathlib import Path
 
 import pytest
-from conformance_assert import assert_key, assert_key_with, instrument
+from conformance_assert import (
+    assert_key,
+    assert_key_with,
+    corpus_subdir,
+    instrument,
+)
 
 from lazily import Level, ReconcileOp, reconcile_ops
 from lazily.reconciliation import common_keys, idx_in, lis_by, moved_keys, stable_keys
 
 
-_SPEC_FIXTURES = (
-    Path(__file__).resolve().parents[2] / "lazily-spec" / "conformance" / "collections"
-)
+_SPEC_FIXTURES = corpus_subdir("collections")
 
 
 # =================================================================================

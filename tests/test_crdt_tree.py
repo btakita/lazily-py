@@ -5,7 +5,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from conformance_assert import assert_key, instrument, scenario_view
+from conformance_assert import (
+    assert_key,
+    corpus_fixture,
+    instrument,
+    scenario_view,
+)
 
 from lazily import CrdtTree, TextCrdt
 
@@ -13,17 +18,10 @@ from lazily import CrdtTree, TextCrdt
 _LOCAL_FIXTURE = (
     Path(__file__).resolve().parent / "conformance" / "crdt-tree" / "algebra.json"
 )
-_SPEC_FIXTURE = (
-    Path(__file__).resolve().parents[2]
-    / "lazily-spec"
-    / "conformance"
-    / "crdt-tree"
-    / "algebra.json"
-)
 
 
 def _fixture() -> dict:
-    path = _SPEC_FIXTURE if _SPEC_FIXTURE.exists() else _LOCAL_FIXTURE
+    path = corpus_fixture("crdt-tree/algebra.json", _LOCAL_FIXTURE)
     return instrument(json.loads(path.read_text()), name="crdt-tree/algebra.json")
 
 

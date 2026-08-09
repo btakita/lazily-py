@@ -66,13 +66,13 @@ from __future__ import annotations
 import asyncio
 import itertools
 import json
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from conformance_assert import (
     assert_key,
     assert_key_into,
+    corpus_subdir,
     excuse_key,
     instrument,
     sub_entries,
@@ -96,13 +96,21 @@ from lazily.teardown import dispose_node
 from lazily.thread_safe import ThreadSafeContext
 
 
-# Sibling-relative, mirroring lazily-rs `const SPEC_DIR` (#lzspecconf). Resolved
-# against the repository root rather than the process cwd so the suite runs the
-# same from any directory. No bundled copies.
-SPEC_DIR = "../lazily-spec/conformance/reactive-graph"
+if TYPE_CHECKING:
+    from pathlib import Path
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-_SPEC_PATH = (_REPO_ROOT / SPEC_DIR).resolve()
+
+# Resolved through the shared corpus seam (#lzoverrideallrunners), never by this
+# module joining `../lazily-spec/conformance` itself. A runner that computes the
+# path locally is invisible to `LAZILY_SPEC_CONFORMANCE_DIR`, so a perturbation
+# probe points the coverage guard at a scratch copy while this runner keeps
+# replaying the shared sibling checkout — and reports green over bytes nobody
+# perturbed. No bundled copies either way.
+_SPEC_PATH = corpus_subdir("reactive-graph")
+
+#: What the skip / assert messages name. Names the copy whenever the override is
+#: set, so a message can never point at a corpus the run did not read.
+SPEC_DIR = str(_SPEC_PATH)
 
 # The canonical fixture set. Asserted against the directory listing so a fixture
 # added or renamed upstream fails loudly instead of going unrun.

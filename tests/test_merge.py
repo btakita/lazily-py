@@ -8,10 +8,9 @@ converges identically to lazily-rs / lazily-js.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
-from conformance_assert import assert_key, instrument, scenarios
+from conformance_assert import assert_key, corpus_subdir, instrument, scenarios
 
 from lazily import (
     KeepLatest,
@@ -25,9 +24,7 @@ from lazily import (
 )
 
 
-_SPEC_COLLECTIONS = (
-    Path(__file__).resolve().parents[2] / "lazily-spec" / "conformance" / "collections"
-)
+_SPEC_COLLECTIONS = corpus_subdir("collections")
 
 _POLICIES = [KeepLatest, Sum, Max, SetUnion, RawFifo]
 
