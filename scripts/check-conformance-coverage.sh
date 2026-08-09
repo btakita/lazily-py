@@ -56,6 +56,10 @@ fi
 # fixture named here is already excused a level up and must not also carry scenario
 # excuses.
 KNOWN_UNCOVERED=(
+  # Register CRDTs (LWW / MV / PnCounter + the CellCrdt projection bit) are
+  # implemented here, but this binding has no canonical replay for the new
+  # registers corpus yet; the Registers coverage row is `~` until it does.
+  "collections/registers_convergence.json"
   # Reactive egress is currently Rust-only; Python has no egress replay runner.
   "egress/egress_generation_fence.json"
   "egress/egress_inflight_window.json"
