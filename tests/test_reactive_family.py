@@ -16,26 +16,23 @@ pre-mint loop (``materialize_all``), lazy is mint-on-access
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import pytest
 from conformance_assert import (
     assert_key_with,
-    excuse_key,
+    corpus_dir,
     instrument,
+    reset,
     sub_entries,
+    tracked,
 )
 
 from lazily import ComputedMap, DisposedError, EntryKind, SourceMap
 
 
 _LOCAL_FIXTURES = Path(__file__).resolve().parent / "conformance" / "materialization"
-_SPEC_FIXTURES = (
-    Path(__file__).resolve().parents[2]
-    / "lazily-spec"
-    / "conformance"
-    / "materialization"
-)
 
 #: Accepted spellings of the derived-map ``kind`` / ``model`` wire fields.
 #: ``SlotMap`` is the DEPRECATED spelling of ``ComputedMap`` — the field is wire
@@ -76,8 +73,22 @@ def entry_kind_of(entry: dict) -> EntryKind:
     return kind
 
 
+def _spec_fixtures() -> Path:
+    """The canonical materialization corpus, honouring the corpus-dir override.
+
+    Resolved per call through :func:`conformance_assert.corpus_dir` rather than
+    frozen in a module-level constant, so ``LAZILY_SPEC_CONFORMANCE_DIR`` — the
+    same override ``scripts/check-conformance-coverage.sh`` reads — actually
+    reaches this runner. With the path hard-coded, a scratch-copy perturbation
+    probe pointed the guard at the copy while this module kept reading the shared
+    sibling checkout, and the vendored ``tests/conformance/`` fallback below made
+    that silent: the run stayed green against unperturbed bytes.
+    """
+    return corpus_dir() / "materialization"
+
+
 def load_fixture(name: str) -> dict:
-    spec_path = _SPEC_FIXTURES / name
+    spec_path = _spec_fixtures() / name
     path = spec_path if spec_path.exists() else _LOCAL_FIXTURES / name
     return instrument(json.loads(path.read_text()), name=f"materialization/{name}")
 
@@ -216,33 +227,85 @@ def _val_lookup(spec_val: dict) -> dict[str, int]:
     return {k: int(v) for k, v in spec_val.items()}
 
 
-def _excuse_default_mode(expected: dict) -> None:
-    """``default_mode`` selects a code path here; there is no value to compare.
+#: ``default_mode`` -> a build of the fixture's map under that strategy, returning
+#: the map's present-at-build key set. Supplied per call site, since constructing
+#: the map depends on the entry kinds the fixture declares.
+_ModeBuilds = Mapping[str, Callable[[], set[str]]]
 
-    The corpus names the default materialization strategy, but lazily-py's
-    ``ReactiveMap`` carries no mode flag — eager vs lazy is which call the caller
-    makes (``materialize_all`` vs ``get_or_insert_with``). Both paths ARE checked,
-    by ``eager_present`` / ``lazy_present_at_build`` / ``lazy_present_after_reads``
-    below; comparing this key against the string literal ``"eager"`` only asserted
-    that the fixture equals itself (#lzconsumednotasserted).
+
+def _assert_default_mode(
+    expected: dict,
+    builds: _ModeBuilds,
+    declared: set[str],
+) -> None:
+    """Assert the BEHAVIOUR ``default_mode`` names, not the label.
+
+    lazily-py's ``ReactiveMap`` carries no mode flag — eager vs lazy is which call
+    the caller makes (``materialize_all`` pre-mint vs ``get_or_insert_with``
+    mint-on-access) — so the fixture's value SELECTS the build: the mode is
+    dispatched on ONLY to choose the construction (``eager`` runs the pre-mint
+    loop, ``lazy`` does not, anything else is a hard failure). The fact then
+    asserted is ``default_mode_eager`` itself, unconditionally: a map built the
+    fixture's default way holds EVERY declared entry at build time — ``declared``
+    is the fixture's whole key set (source entries plus computed entries), never
+    "what this mode implies".
+
+    That right-hand side is the whole point. Asserting the present set a mode
+    *implies* is a tautology: the library really does defer under lazy, so a corpus
+    flipped to ``"lazy"`` would stay GREEN and the probe would prove nothing (the
+    trap that first landed in lazily-rs's mixed-kind site). Only the eager build
+    satisfies "every declared entry at build", so both directions are live — a
+    corpus naming ``lazy`` as its default reddens, and a library whose pre-mint
+    loop stops materializing reddens.
+
+    Comparing the key against the literal ``"eager"`` would assert only that the
+    fixture equals itself (#lzconsumednotasserted) — a build that materializes
+    nothing still passes that. Excusing it as "no mode flag to read back" is the
+    same hole with a reason attached: lazily-cpp and lazily-cs have no mode flag
+    either and both assert this behaviour.
     """
-    excuse_key(
-        expected,
-        "default_mode",
-        "no mode flag in lazily-py's ReactiveMap; the eager and lazy paths are "
-        "asserted directly via eager_present / lazy_present_* in this module",
-    )
+
+    def check(want: object) -> None:
+        if not isinstance(want, str) or want not in builds:
+            raise AssertionError(
+                f"unknown default_mode {want!r}; expected one of {sorted(builds)}"
+            )
+        present = builds[want]()
+        assert present == declared, (
+            f"a map built the fixture's default way ({want}) materializes every "
+            f"declared entry at build: expected {sorted(declared)}, got "
+            f"{sorted(present)}"
+        )
+
+    assert_key_with(expected, "default_mode", check)
 
 
 def _check_val_fixture(name: str) -> dict:
     fixture = load_fixture(name)
     assert fixture["kind"] in _COMPUTED_MAP_MODELS
     expected = fixture["expected"]
-    _excuse_default_mode(expected)
 
     vals = _val_lookup(fixture["spec"]["val"])
     keys = list(vals.keys())
     lookup = _ctx_factory(vals.__getitem__)
+
+    # default_mode_eager. Every entry in a `spec.val` fixture is DERIVED: the eager
+    # build pre-mints the whole keyset, the lazy build pre-mints nothing, and only
+    # the former holds every declared key at build.
+    def default_build(mode: str) -> set[str]:
+        fam: ComputedMap[str, int] = ComputedMap({})
+        if mode == "eager":
+            fam.materialize_all(keys, lookup)
+        return set(fam.present_keys())
+
+    _assert_default_mode(
+        expected,
+        {
+            "eager": lambda: default_build("eager"),
+            "lazy": lambda: default_build("lazy"),
+        },
+        set(keys),
+    )
 
     # eager: pre-mint the whole keyset; lazy: empty, mint-on-access.
     eager: ComputedMap[str, int] = ComputedMap({})
@@ -309,7 +372,6 @@ def test_conformance_deferral_not_deallocation() -> None:
 def test_conformance_entry_kind_orthogonal_to_mode() -> None:
     fixture = load_fixture("entry_kind_orthogonal_to_mode.json")
     expected = fixture["expected"]
-    _excuse_default_mode(expected)
 
     entries = fixture["spec"]["entries"]
     cell_keys = [k for k, e in entries.items() if entry_kind_of(e) is EntryKind.SOURCE]
@@ -321,6 +383,30 @@ def test_conformance_entry_kind_orthogonal_to_mode() -> None:
     # a SourceMap entry) and as a family factory; keep it 1-arg and wrap it with
     # :func:`_ctx_factory` only at the family call sites (the ctx-param contract).
     lookup = vals.__getitem__
+
+    # default_mode_eager with the entry-kind split. Source entries are present at
+    # build under EVERY strategy, computed entries only under eager, so ONLY the
+    # eager build holds all four declared entries — the right-hand side is the whole
+    # declared key set, not the two keys the lazy build would imply (that form is
+    # the tautology that stays green on a corpus flip). Asserted BEFORE
+    # `eager_present` so a regression in the pre-mint loop reddens THIS arm first.
+    def default_build(mode: str) -> set[str]:
+        cells: SourceMap[str, int] = SourceMap({})
+        for k in cell_keys:
+            cells.entry(k, lookup(k))
+        slots: ComputedMap[str, int] = ComputedMap({})
+        if mode == "eager":
+            slots.materialize_all(slot_keys, _ctx_factory(lookup))
+        return set(cells.present_keys()) | set(slots.present_keys())
+
+    _assert_default_mode(
+        expected,
+        {
+            "eager": lambda: default_build("eager"),
+            "lazy": lambda: default_build("lazy"),
+        },
+        set(cell_keys) | set(slot_keys),
+    )
 
     # A single ReactiveMap fixes one handle kind, so a mixed-kind fixture is
     # modelled by a SourceMap over the cell entries and a ComputedMap over the slot
@@ -379,7 +465,9 @@ def test_fixture_loads_and_is_computed_map(name: str) -> None:
     fixture = load_fixture(name)
     assert fixture["kind"] in _COMPUTED_MAP_MODELS
     assert fixture["model"] in _COMPUTED_MAP_MODELS
-    _excuse_default_mode(fixture["expected"])
+    # `default_mode` is asserted behaviourally by the replay tests above; the
+    # session-wide ledger books it there, so this loader test asserts nothing about
+    # it rather than excusing a key the same session proves.
 
 
 # ---------------------------------------------------------------------------
@@ -400,6 +488,27 @@ def test_entry_kind_accepts_old_and_new_fixture_spellings(
     spelling: str, expected: EntryKind
 ) -> None:
     assert entry_kind_of({"kind": spelling, "val": 1}) is expected
+
+
+#: Fixture label for the ``default_mode`` guard's own probe. Not a corpus path —
+#: the probe plants a value no fixture carries, so the ledger it touches is reset.
+_MODE_PROBE = "materialization/<default_mode guard probe>"
+
+
+@pytest.mark.parametrize("mode", ["", "Eager", "deferred", "auto", 1, None])
+def test_unknown_default_mode_is_a_hard_error(mode: object) -> None:
+    # No silent default, no skip: a strategy this runner cannot build fails the run
+    # (the same rule as an unreadable entry `kind` below).
+    block = tracked({"default_mode": mode}, fixture=_MODE_PROBE, block="expected")
+    try:
+        with pytest.raises(AssertionError, match="unknown default_mode"):
+            _assert_default_mode(block, {"eager": lambda: {"a"}}, {"a"})
+    finally:
+        # The raise leaves `default_mode` read-but-never-asserted in the
+        # session-wide ledger. This is a probe of the guard, not a fixture replay,
+        # so drop its ledger rather than leave a verdict about a fixture that does
+        # not exist.
+        reset(_MODE_PROBE)
 
 
 @pytest.mark.parametrize("spelling", ["", "Cell", "memo", "signal", "cells"])
