@@ -272,6 +272,7 @@ __all__ = [
     "SemaphoreCore",
     "SeqCrdt",
     "SeqElement",
+    "SeqStamp",
     "ServiceRegistry",
     "ServiceRegistryCore",
     "SessionCell",
@@ -778,7 +779,7 @@ from .resilience import (
     TimeoutCore,
 )
 from .semtree import Fold, SemNode, SemTree, count_positive_fold, sum_fold
-from .seqcrdt import SeqCrdt, SeqElement
+from .seqcrdt import SeqCrdt, SeqElement, SeqStamp
 from .service import (
     DiscoveryCell,
     DiscoveryCore,

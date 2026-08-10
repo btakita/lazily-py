@@ -23,10 +23,10 @@ The executable reference behind ``conformance/collections/seqcrdt_convergence.js
 from __future__ import annotations
 
 
-__all__ = ["SeqCrdt", "SeqElement"]
+__all__ = ["SeqCrdt", "SeqElement", "SeqStamp"]
 
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -51,6 +51,76 @@ class Position:
         return self == other or self < other
 
 
+@dataclass(frozen=True, slots=True, order=True)
+class SeqStamp:
+    """A hybrid-logical-clock stamp — the total order ``(wall, logical, peer)``.
+
+    Field order IS the comparison order, so the generated ``__lt__``/``__gt__``
+    already give the (wall, logical) causal order with ``peer`` as the final
+    tiebreaker. That last component is not decoration: LWW adopts only on
+    strictly-greater, so two replicas that could mint an identical triple would
+    each refuse the other's write and diverge permanently (``#lzzigforkhlcpeer``).
+    """
+
+    wall: int
+    logical: int
+    peer: int
+
+
+#: The stamp every register sorts above — the "never written" floor. Used for
+#: ``deleted``, which starts un-stamped.
+_ZERO_STAMP = SeqStamp(0, 0, 0)
+
+
+@dataclass(slots=True)
+class _SeqClock:
+    """A caller-driven hybrid logical clock — the causal position only.
+
+    Deliberately does NOT hold the peer. The peer lives on the replica and is
+    stamped in at :meth:`SeqCrdt._stamp` time, which is what makes it
+    structurally impossible for a fork to inherit the SOURCE's tiebreaker: there
+    is no peer here to copy. lazily-zig shipped that exact bug — a fork that
+    carried the whole clock, peer included — while fixing the carry itself
+    (``#lzzigforkhlcpeer``).
+
+    Never reads the system clock: every mutator takes ``now``, so replay is
+    deterministic and skew is expressible in a test.
+    """
+
+    last_wall: int = 0
+    last_logical: int = 0
+
+    def send(self, now: int) -> tuple[int, int]:
+        """Advance for a local event at caller-supplied wall time ``now``.
+
+        The result is strictly greater than every position this clock has minted
+        or observed, so a local write can never lose to state the replica
+        already holds — including when ``now`` runs backwards.
+        """
+        if now > self.last_wall:
+            self.last_wall = now
+            self.last_logical = 0
+        else:
+            self.last_logical += 1
+        return self.last_wall, self.last_logical
+
+    def recv(self, remote: SeqStamp, now: int) -> None:
+        """Advance past an observed ``remote`` stamp at wall time ``now``."""
+        wall = max(self.last_wall, remote.wall, now)
+        if wall == self.last_wall and wall == remote.wall:
+            self.last_logical = max(self.last_logical, remote.logical) + 1
+        elif wall == self.last_wall:
+            self.last_logical += 1
+        elif wall == remote.wall:
+            self.last_logical = remote.logical + 1
+        else:
+            self.last_logical = 0
+        self.last_wall = wall
+
+    def copy(self) -> _SeqClock:
+        return _SeqClock(self.last_wall, self.last_logical)
+
+
 @dataclass
 class SeqElement[V]:
     """One sequence element — three independent LWW registers.
@@ -62,11 +132,15 @@ class SeqElement[V]:
 
     id: str
     value: V
-    value_stamp: int
+    value_stamp: SeqStamp
     position: Position
-    position_stamp: int
+    position_stamp: SeqStamp
     deleted: bool = False
-    deleted_stamp: int = 0
+    deleted_stamp: SeqStamp = field(default=_ZERO_STAMP)
+
+    def max_stamp(self) -> SeqStamp:
+        """The greatest of this element's three register stamps."""
+        return max(self.value_stamp, self.position_stamp, self.deleted_stamp)
 
 
 def _frac_between(lo: tuple[int, ...], hi: tuple[int, ...]) -> tuple[int, ...]:
@@ -103,13 +177,14 @@ class SeqCrdt[V]:
     tombstone.
     """
 
-    __slots__ = ("_elements", "peer")
+    __slots__ = ("_clock", "_elements", "peer")
 
     def __init__(self, peer: int) -> None:
         self.peer = peer
+        self._clock = _SeqClock()
         self._elements: dict[str, SeqElement[V]] = {}
 
-    # -- seed / clone --------------------------------------------------- #
+    # -- seed / clone / fork -------------------------------------------- #
 
     @classmethod
     def seed(cls, peer: int, inserts: list[dict[str, Any]]) -> SeqCrdt[Any]:
@@ -120,7 +195,36 @@ class SeqCrdt[V]:
         return buf
 
     def clone(self) -> SeqCrdt[V]:
-        dup: SeqCrdt[V] = SeqCrdt(self.peer)
+        """A deep copy under the SAME peer — a snapshot, not a second writer.
+
+        Carries the clock, because a copy that restarted at zero would regress
+        exactly the way a fork would: its next local op could mint a stamp
+        behind state it already holds and lose its own write.
+        """
+        return self.fork(self.peer)
+
+    def fork(self, peer: int) -> SeqCrdt[V]:
+        """A deep copy re-owned under ``peer`` — a new minting identity.
+
+        Two independent things, and both matter (``#lzzigforkhlcpeer``):
+
+        The causal POSITION carries. A fork has already observed everything the
+        source holds, so a clock restarted at zero would let an ordinary skewed
+        ``now`` — below the source's last wall time, which is the entire reason
+        hybrid logical clocks exist — mint a stamp causally *behind* state the
+        fork already carries. Every register adopts only on strictly-greater, so
+        that write is silently dropped by the fork's own state.
+
+        The PEER does not carry. It is the stamp's final tiebreaker, so two
+        replicas stamping under one id can mint the identical
+        ``(wall, logical, peer)``; a tie means *neither* side adopts and they
+        diverge permanently. Here that is structural rather than remembered —
+        :class:`_SeqClock` holds no peer, and :meth:`_stamp` reads
+        :attr:`peer` off the replica — so reassigning ``peer`` on a
+        :meth:`clone` is the same fork as calling this.
+        """
+        dup: SeqCrdt[V] = SeqCrdt(peer)
+        dup._clock = self._clock.copy()
         dup._elements = {
             k: SeqElement(
                 e.id,
@@ -137,6 +241,11 @@ class SeqCrdt[V]:
 
     # -- internal helpers ----------------------------------------------- #
 
+    def _stamp(self, now: int) -> SeqStamp:
+        """Mint the next local stamp under THIS replica's peer."""
+        wall, logical = self._clock.send(now)
+        return SeqStamp(wall, logical, self.peer)
+
     def _ordered_alive(self) -> list[SeqElement[V]]:
         alive = [e for e in self._elements.values() if not e.deleted]
         alive.sort(key=lambda e: e.position)
@@ -146,36 +255,39 @@ class SeqCrdt[V]:
         self, elem_id: str, value: V, now: int, lo: tuple[int, ...], hi: tuple[int, ...]
     ) -> None:
         frac = _frac_between(lo, hi)
+        stamp = self._stamp(now)
         self._elements[elem_id] = SeqElement(
             id=elem_id,
             value=value,
-            value_stamp=now,
+            value_stamp=stamp,
             position=Position(frac, self.peer),
-            position_stamp=now,
+            position_stamp=stamp,
         )
 
     def _insert_back(self, elem_id: str, value: V, now: int) -> None:
         ordered = self._ordered_alive()
         last_frac = ordered[-1].position.frac if ordered else ()
         frac = _frac_after(last_frac)
+        stamp = self._stamp(now)
         self._elements[elem_id] = SeqElement(
             id=elem_id,
             value=value,
-            value_stamp=now,
+            value_stamp=stamp,
             position=Position(frac, self.peer),
-            position_stamp=now,
+            position_stamp=stamp,
         )
 
     def _insert_front(self, elem_id: str, value: V, now: int) -> None:
         ordered = self._ordered_alive()
         first_frac = ordered[0].position.frac if ordered else (256,)
         frac = _frac_between((), first_frac)
+        stamp = self._stamp(now)
         self._elements[elem_id] = SeqElement(
             id=elem_id,
             value=value,
-            value_stamp=now,
+            value_stamp=stamp,
             position=Position(frac, self.peer),
-            position_stamp=now,
+            position_stamp=stamp,
         )
 
     # -- public mutators ------------------------------------------------ #
@@ -203,28 +315,33 @@ class SeqCrdt[V]:
         elem = self._elements.get(elem_id)
         if elem is None:
             return
-        # LWW reassignment: later stamp wins.
-        if now >= elem.position_stamp:
+        # LWW reassignment: later stamp wins. `_stamp` is strictly greater than
+        # anything this replica has minted or observed, so a local move never
+        # loses to the state it is moving.
+        stamp = self._stamp(now)
+        if stamp > elem.position_stamp:
             elem.position = Position(frac, self.peer)
-            elem.position_stamp = now
+            elem.position_stamp = stamp
 
     def set_value(self, elem_id: str, value: V, now: int) -> None:
         """An independent LWW reassignment of the value register."""
         elem = self._elements.get(elem_id)
         if elem is None:
             return
-        if now >= elem.value_stamp:
+        stamp = self._stamp(now)
+        if stamp > elem.value_stamp:
             elem.value = value
-            elem.value_stamp = now
+            elem.value_stamp = stamp
 
     def remove(self, elem_id: str, now: int) -> None:
         """An LWW tombstone."""
         elem = self._elements.get(elem_id)
         if elem is None:
             return
-        if now >= elem.deleted_stamp:
+        stamp = self._stamp(now)
+        if stamp > elem.deleted_stamp:
             elem.deleted = True
-            elem.deleted_stamp = now
+            elem.deleted_stamp = stamp
 
     # -- merge ---------------------------------------------------------- #
 
@@ -233,8 +350,14 @@ class SeqCrdt[V]:
 
         Returns whether ``self`` changed. Position/value/deleted are each merged
         by stamp; a concurrent move + value-edit therefore both apply.
+
+        Advances the local clock past every stamp observed here, so a later
+        local write is causally ahead of the state just merged in rather than
+        racing it.
         """
-        del now
+        now_micros = 0 if now is None else now
+        for other_elem in other._elements.values():
+            self._clock.recv(other_elem.max_stamp(), now_micros)
         changed = False
         for elem_id, other_elem in other._elements.items():
             existing = self._elements.get(elem_id)

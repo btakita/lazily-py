@@ -387,11 +387,15 @@ class _SeqReplicas:
     def run(self, steps: list[dict]) -> None:
         for st in steps:
             if "fork" in st:
+                # `SeqCrdt.fork` rather than clone-then-reassign-peer: a fork
+                # must carry the source's causal clock, and this step is the
+                # corpus's only fork (#lzzigforkhlcpeer). The two are equivalent
+                # here — the clock holds no peer — but naming the operation
+                # keeps the replay honest about what the fixture step means.
                 src = self.r.get("a")
                 self.r[st["fork"]] = (
-                    src.clone() if src is not None else SeqCrdt(st["peer"])
+                    src.fork(st["peer"]) if src is not None else SeqCrdt(st["peer"])
                 )
-                self.r[st["fork"]].peer = st["peer"]
                 continue
             if "clone" in st:
                 self.r[st["clone"]] = self.r[st["from"]].clone()
