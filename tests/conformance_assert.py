@@ -316,7 +316,20 @@ KNOWN_UNBOUND_BLOCKS: dict[str, str] = {}
 #: Positive-evidence floor (``#lzvacuousrun``). Zero declared blocks means zero
 #: unbound blocks, which reports OK having compared nothing. Do not lower this to
 #: fix a failure.
-MIN_DECLARED_BLOCKS = 20
+#:
+#: Tracks what the run ACTUALLY inventories, exactly — no margin, no slack. Pinned
+#: 2026-08-09 at 31, re-derived from a full ``make test`` on the commit CI run
+#: 31343738442 was green over (that run opened the same 139/150 fixtures, and the
+#: inventory is a function of the opened fixtures' contents). It had sat at 20,
+#: leaving eleven blocks that could have stopped being inventoried with this rung
+#: still green.
+#:
+#: Do not raise this "by however many blocks a change adds" while leaving an old
+#: margin in place — that convention is what let the sibling bindings' floors rot
+#: to 40 replays behind reality (#lzscenariofloordrift). ``conftest`` prints an
+#: ``assertion-block inventory OK`` line carrying the live count, so re-pin this
+#: from a completed CI log rather than guessing.
+MIN_DECLARED_BLOCKS = 31
 
 #: digest -> {"fixture|where"} for every block an opened fixture carried.
 _DECLARED_BLOCKS: dict[str, set[str]] = {}

@@ -170,13 +170,26 @@ fi
 # reporting OK. Do not lower these to fix a red run — a drop here means the
 # corpus or the recorder shrank, which is the finding.
 #
-# MIN_FIXTURES is calibrated slightly below the real current number (136 of 140
-# canonical fixtures opened, 4 known-uncovered) so ordinary corpus churn does not
-# trip it while a collapse does. It ratchets UP with coverage — the slack stays
-# fixed at four so a newly replayed fixture cannot be silently dropped again. The
-# env override exists for bisecting an upstream corpus change, not for making a
-# red run green.
-MIN_FIXTURES="${MIN_FIXTURES:-132}"
+# MIN_FIXTURES tracks WHAT CI ACTUALLY OPENS, exactly — no margin, no slack.
+# Pinned 2026-08-09 from CI run 31343738442 against the published corpus:
+# 139/150 canonical fixtures OPENED. A local `make test` on the same commit
+# reproduced that number.
+#
+# It previously sat at 132, on a "keep a fixed slack of four below the real
+# number" convention. That convention is the bug, and the slack did not stay
+# fixed: the real number moved to 139 while the floor stayed at 132, so seven
+# replayed fixtures could have stopped being opened with this guard still green.
+# The same convention rotted lazily-zig's scenario floor to 91 against 147
+# (#lzscenariofloordrift). Do not reintroduce a margin. When a change genuinely
+# adds replays, re-read the `conformance coverage OK` line from a COMPLETED CI
+# run — which clones the published corpus (#lzspecpushbeforebindings) rather than
+# trusting a working tree — and set this to that total.
+#
+# An upstream fixture that lands without a Python runner raises `total` and
+# leaves `covered` alone, so it does not trip this; only a replay that STOPS
+# running does. The env override exists for bisecting an upstream corpus change,
+# not for making a red run green.
+MIN_FIXTURES="${MIN_FIXTURES:-139}"
 if [ "$total" -eq 0 ]; then
   echo "ERROR: the corpus at $SPEC_DIR listed ZERO fixtures." >&2
   echo "       Every check above is vacuously green over an empty population:" >&2
