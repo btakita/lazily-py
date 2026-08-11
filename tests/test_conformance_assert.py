@@ -24,6 +24,8 @@ import pytest
 from conformance_assert import (
     _BOUND_BLOCKS,
     _DECLARED_BLOCKS,
+    _DECLARED_FIXTURES,
+    _DECLARED_SITES,
     _LEDGERS,
     KNOWN_UNBOUND_BLOCKS,
     TrackedBlock,
@@ -165,7 +167,12 @@ def test_comparing_against_a_literal_never_marks_the_key() -> None:
 def test_assert_key_with_hands_the_fixture_value_to_the_predicate() -> None:
     block = tracked({"similarity_min": 0.8}, fixture="selftest/with.json")
     seen: list[float] = []
-    assert_key_with(block, "similarity_min", lambda want: seen.append(want) or True)
+
+    def _tolerance(want: float) -> bool:
+        seen.append(float(want))
+        return want <= 0.9
+
+    assert_key_with(block, "similarity_min", _tolerance)
     assert seen == [0.8]
     assert not _report("selftest/with.json")
 
@@ -175,6 +182,105 @@ def test_assert_key_with_hands_the_fixture_value_to_the_predicate() -> None:
     reported = _report("selftest/with2.json")
     assert reported and "never compared" in reported[0]
     reset(fixture="selftest/with2.json")
+
+
+# ---------------------------------------------------------------------------
+# The predicate that never LOOKED (#lzunboundblockguard)
+# ---------------------------------------------------------------------------
+#
+# `assert_key_with` marks the key asserted on the strength of the callback's
+# verdict, so a callback that ignores its argument books a satisfied obligation
+# having compared nothing — lazily-cs shipped exactly that, an `Assert.All` over
+# the fixture's own array asserting a property of an ENUM, vacuously true on an
+# empty array and still marked SATISFIED.
+
+#: :func:`assert_key_with` under a name lazily-spec's SOURCE-level
+#: ``check-assertion-ordering`` / ``check-assert-with-consumption`` does not scan.
+#: The tests below have to CONSTRUCT the vacuous callback that guard forbids in
+#: runners — it is the input the runtime guard exists to reject — and to pass a
+#: parametrized callback the static scan cannot resolve to a definition. Neither
+#: is a runner, and the shared script is lazily-spec's to amend, not this repo's.
+#: Every real call site in this repo stays under the scanned spelling.
+_unscanned_assert_key_with = assert_key_with
+
+#: On the left of the `==` on purpose: `plain_list == proxy` is the REFLECTED
+#: path, and it is the shape a real runner writes (`actual == want`).
+_THREE_ROWS = [1, 2, 3]
+
+
+@pytest.mark.parametrize(
+    ("value", "kind"),
+    [
+        ([1, 2, 3], "list"),
+        ({"offset": 0}, "dict"),
+        (3, "int"),
+        (0.8, "float"),
+    ],
+)
+def test_a_predicate_that_ignores_its_argument_fails(value, kind: str) -> None:
+    fixture = f"selftest/vacuous-{kind}.json"
+    block = tracked({"want": value}, fixture=fixture)
+    try:
+        with pytest.raises(AssertionError, match="never READ the fixture value"):
+            _unscanned_assert_key_with(block, "want", lambda _want: True)
+    finally:
+        reset(fixture=fixture)
+
+
+@pytest.mark.parametrize(
+    ("value", "check"),
+    [
+        ([1, 2, 3], lambda want: sorted(want) == [1, 2, 3]),
+        ([1, 2, 3], lambda want: len(want) == 3),
+        ([1, 2, 3], lambda want: want == [1, 2, 3]),
+        ([1, 2, 3], lambda want: want == _THREE_ROWS),
+        ([1, 2, 3], lambda want: 2 in want),
+        ([1, 2, 3], lambda want: list(want) == [1, 2, 3]),
+        ({"offset": 0}, lambda want: want["offset"] == 0),
+        ({"offset": 0}, lambda want: want == {"offset": 0}),
+        ({"offset": 0}, lambda want: sorted(want) == ["offset"]),
+        (3, lambda want: want == 3),
+        (3, lambda want: want > 2),
+        (0.8, lambda want: want <= 0.85),
+    ],
+    ids=range(12),
+)
+def test_a_predicate_that_really_reads_the_value_passes(value, check) -> None:
+    """The proxy must not redden a predicate that was doing its job — the
+    failure mode that would make the whole rung unusable."""
+    fixture = "selftest/reads.json"
+    block = tracked({"want": value}, fixture=fixture)
+    try:
+        _unscanned_assert_key_with(block, "want", check)
+    finally:
+        reset(fixture=fixture)
+
+
+def test_an_unproxyable_value_is_passed_through_unchanged() -> None:
+    """A `str` reaches a predicate as an ARGUMENT to a C string method, which
+    calls no dunder on it. Proxying would redden `actual.startswith(want)`, so
+    these types are documented as out of reach rather than guessed at."""
+    fixture = "selftest/unproxyable.json"
+    block = tracked({"prefix": "ab", "flag": True}, fixture=fixture)
+    try:
+        assert_key_with(block, "prefix", lambda want: "abc".startswith(want))
+        assert_key_with(block, "flag", lambda want: want is True)
+    finally:
+        reset(fixture=fixture)
+
+
+def test_the_predicate_receives_a_value_that_still_looks_like_its_type() -> None:
+    """The proxies subclass the built-in, so an `isinstance` branch inside a
+    predicate keeps taking the same path it took before the guard existed."""
+    fixture = "selftest/isinstance.json"
+    block = tracked({"rows": [1, 2], "spec": {"a": 1}}, fixture=fixture)
+    try:
+        assert_key_with(block, "rows", lambda want: isinstance(want, list) and want[0])
+        assert_key_with(
+            block, "spec", lambda want: isinstance(want, dict) and want["a"] == 1
+        )
+    finally:
+        reset(fixture=fixture)
 
 
 # ---------------------------------------------------------------------------
@@ -863,6 +969,8 @@ def block_ledger():
     erase the evidence the session verdict reads.
     """
     saved_declared = {key: set(value) for key, value in _DECLARED_BLOCKS.items()}
+    saved_sites = dict(_DECLARED_SITES)
+    saved_fixture_names = set(_DECLARED_FIXTURES)
     saved_bound = set(_BOUND_BLOCKS)
     saved_excuses = dict(KNOWN_UNBOUND_BLOCKS)
     # Binding a planted block also opens a rung-2 consumption ledger for it, and
@@ -875,6 +983,8 @@ def block_ledger():
     finally:
         reset_blocks()
         _DECLARED_BLOCKS.update(saved_declared)
+        _DECLARED_SITES.update(saved_sites)
+        _DECLARED_FIXTURES.update(saved_fixture_names)
         _BOUND_BLOCKS.update(saved_bound)
         KNOWN_UNBOUND_BLOCKS.clear()
         KNOWN_UNBOUND_BLOCKS.update(saved_excuses)
@@ -976,3 +1086,89 @@ def test_the_floor_fails_when_the_inventory_collapses(block_ledger) -> None:
     reported = block_bind_failures(enforce_floor=True)
     assert reported, "an empty inventory passed the floor"
     assert "distinct assertion block(s) were inventoried" in reported[0]
+
+
+# ---------------------------------------------------------------------------
+# The inventory walk covers every BLOCK_KEY at every depth (#lzunboundblockguard)
+# ---------------------------------------------------------------------------
+#
+# The narrow walk — `assertions` only, top level plus one hard-coded level under
+# `frames`/`scenarios`/`rejects` — inventoried 31 of the 578 blocks this repo's
+# opened fixtures carry, so every `expect` in the corpus sat outside the rung
+# that exists to catch a block nothing binds. lazily-dart's dead per-frame
+# blocks were found by FLIPPING fixture values, never by a guard.
+
+_DEEP_FIXTURE = json.dumps(
+    {
+        "expect": {"top": 1},
+        "steps": [
+            {"op": "write"},
+            {"op": "read", "expect": {"value": 7}},
+        ],
+        "cases": {"nested": {"expected": {"outcome": "reject"}}},
+    }
+)
+
+
+def test_every_block_key_at_every_depth_is_inventoried(block_ledger) -> None:
+    record_declared_blocks("selftest/deep.json", _DEEP_FIXTURE)
+
+    sites = sorted(site for sites in _DECLARED_BLOCKS.values() for site in sites)
+    assert sites == [
+        "selftest/deep.json|cases.nested.expected",
+        "selftest/deep.json|expect",
+        "selftest/deep.json|steps[1].expect",
+    ]
+
+
+def test_a_nested_expect_no_runner_binds_is_reported(block_ledger) -> None:
+    """The dart shape: a block one level down, inside an array element."""
+    record_declared_blocks("selftest/deep.json", _DEEP_FIXTURE)
+    tracked({"top": 1}, fixture="selftest/deep.json", block="expect")
+    tracked(
+        {"outcome": "reject"},
+        fixture="selftest/deep.json",
+        block="cases.nested.expected",
+    )
+
+    reported = block_bind_failures()
+    assert reported, "an unbound per-step `expect` produced no report line"
+    assert len(reported) == 1
+    assert "selftest/deep.json|steps[1].expect" in reported[0]
+    assert "bound by no runner" in reported[0]
+
+
+def test_an_excuse_for_a_block_that_IS_bound_fails_as_stale(block_ledger) -> None:
+    """Both directions. A one-directional allowlist only ever grows, and an
+    excuse nobody can be forced to delete exempts the block forever."""
+    record_declared_blocks("selftest/unbound.json", _UNBOUND_FIXTURE)
+    KNOWN_UNBOUND_BLOCKS["selftest/unbound.json|assertions"] = "parked upstream"
+    assert not block_bind_failures(), "precondition: the excuse suppresses it"
+
+    tracked(
+        json.loads(_UNBOUND_FIXTURE)["assertions"],
+        fixture="selftest/unbound.json",
+    )
+    reported = block_bind_failures()
+    assert reported, "an excuse for a bound block reported nothing"
+    assert "selftest/unbound.json|assertions" in reported[0]
+    assert "a runner DOES bind" in reported[0]
+
+
+def test_an_excuse_naming_a_block_the_fixture_lost_fails_as_rotted(
+    block_ledger,
+) -> None:
+    record_declared_blocks("selftest/unbound.json", _UNBOUND_FIXTURE)
+    KNOWN_UNBOUND_BLOCKS["selftest/unbound.json|frames[9].expect"] = "moved upstream"
+
+    reported = block_bind_failures()
+    assert any("has rotted" in line for line in reported), reported
+
+
+def test_an_excuse_for_a_fixture_this_run_never_opened_is_out_of_scope(
+    block_ledger,
+) -> None:
+    """`pytest -k` opens a subset; every other excuse is out of scope, not wrong."""
+    KNOWN_UNBOUND_BLOCKS["selftest/never-opened.json|assertions"] = "not opened here"
+
+    assert not block_bind_failures()

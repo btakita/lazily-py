@@ -195,12 +195,15 @@ def pytest_sessionfinish(session, exitstatus) -> None:  # type: ignore[no-untype
         report += [
             "",
             "CONFORMANCE ASSERTION BLOCK NEVER BOUND (#lznullformblind)",
-            "  A fixture this suite OPENED carries an `assertions` block that no",
-            "  runner ever handed to a tracker. Every guard below is scoped to a",
-            "  block a runner bound, so this one reports nothing at all rather",
-            "  than reporting a gap: its keys are not unread — nothing reads them.",
-            "  Bind it via tracked(...) / instrument(...) and assert its keys, or",
-            "  declare it in KNOWN_UNBOUND_BLOCKS with a reason.",
+            "  A fixture this suite OPENED carries an assertion-bearing block —",
+            "  any of BLOCK_KEYS, at any depth — that no runner ever handed to a",
+            "  tracker. Every guard below is scoped to a block a runner bound, so",
+            "  this one reports nothing at all rather than reporting a gap: its",
+            "  keys are not unread — nothing reads them. Bind it via tracked(...)",
+            "  / instrument(...) and assert its keys, or declare it in",
+            "  KNOWN_UNBOUND_BLOCKS with a reason. A reason is mandatory, and the",
+            "  entry is checked both ways: an excuse for a block a runner DOES",
+            "  bind fails as stale (#lzunboundblockguard).",
             "",
         ]
         report += [f"  {line}" for line in unbound]

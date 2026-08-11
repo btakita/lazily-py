@@ -48,6 +48,20 @@ fixture value), :func:`assert_key_with` (any predicate, handed the fixture value
 and whole-block equality — an arm that compares against a hand-written constant
 never marks the key, because the fixture's value never reached the comparison.
 
+There is a fourth shape of the same defect, one level in from (2):
+
+4. a predicate that RECEIVES the fixture value and never reads it.
+
+``assert_key`` compares by construction and cannot have it. ``assert_key_with``
+marks the key asserted on the strength of the callback's verdict, so a callback
+that ignores its argument books a satisfied obligation having compared nothing —
+lazily-cs shipped exactly that, an ``Assert.All`` over the fixture's own array
+that asserted a property of an ENUM and never touched the replay, vacuously true
+on an empty array and still marked SATISFIED. So ``assert_key_with`` hands the
+callback a RECORDING view of the value and fails when nothing read it
+(``#lzunboundblockguard``). See :data:`UNPROXYABLE_VALUE_TYPES` for the value
+types Python leaves out of reach.
+
 Where a key genuinely cannot be checked at the call site — the binding proves the
 fact elsewhere, or the field is a discriminator selecting a code path rather than a
 value — :func:`excuse_key` records the key and a non-empty reason. Excuses run in
@@ -300,39 +314,158 @@ PROSE_DECLARATION_KEY = "prose"
 # two such blocks carrying eight silent keys, one of them the anti-spoof
 # invariant its fixture exists for; lazily-cpp found a third.
 #
-# So the loader inventories every ``assertions`` block at READ time (the
+# So the loader inventories every assertion-bearing block at READ time (the
 # ``Path.read_text`` recorder in ``conftest.py``) and ``TrackedBlock.__init__``
 # books one as BOUND. The two sides are matched by the block's CONTENT digest and
 # never by its ``where`` label: runners spell those labels inconsistently
 # (``assertions``, ``frames[warn].assertions``, ``scenarios[3].expect``) and a
 # label-keyed ledger would silently miss the mismatch rather than report it.
+#
+# The inventory walk is the WHOLE of ``BLOCK_KEYS`` at EVERY depth, mirroring
+# :func:`instrument` exactly (#lzunboundblockguard). It used to be ``assertions``
+# only, top level plus one hard-coded level inside ``frames``/``scenarios``/
+# ``rejects`` — which inventoried 31 blocks out of the 578 the same 139 opened
+# fixtures carry, so every ``expect`` block in the corpus was outside the rung
+# that exists to catch a block nothing binds. Widening it found 25 real ones here
+# (the per-step ``expect`` blocks of the six parked merge-feed fixtures). The
+# narrow walk is also how lazily-dart's dead per-frame ``assertions`` blocks
+# stayed invisible: they were found by FLIPPING fixture values (#lzperturbaudit)
+# and reporting no failure, never by a guard.
 
 #: An assertion block that genuinely cannot be bound belongs HERE, as a
 #: documented excuse the guard reads on every run, not as a runner fabricated to
 #: manufacture coverage. Keys are ``"fixture|where"``; values are non-empty
 #: reasons — an excuse with no reason is an unexplained gap wearing a green badge.
-KNOWN_UNBOUND_BLOCKS: dict[str, str] = {}
+#:
+#: Checked in BOTH directions, like every other ledger in this module: an entry
+#: whose block IS bound fails as stale, and an entry naming a block an opened
+#: fixture no longer carries fails as rotted. A one-directional allowlist only
+#: ever grows, and an excuse nobody can be forced to delete is the undocumented
+#: default it was written to replace.
+#:
+#: The current entries are the per-step ``expect`` blocks of the six merge-feed
+#: fixtures ``tests/test_reactive_graph_conformance.py`` skips in EVERY context
+#: (its ``MERGEFEED_SKIPS``). Five drive the ``merge_cell`` op, which lazily-py's
+#: reactive graph ships no node kind for; the sixth asserts the novel
+#: ``drain_exhausted`` key. The runner's pre-flight rejects each fixture before a
+#: single step runs, so no ``expect`` under it is ever bound. When the op lands,
+#: every entry below fails as stale and has to be deleted — which is the point of
+#: writing them per SITE rather than per fixture.
+_MERGE_CELL_UNBOUND = (
+    "skipped in every context: lazily-py's reactive graph ships no `merge_cell` "
+    "node kind, so test_reactive_graph_conformance's pre-flight rejects the "
+    "fixture on the op and no step's `expect` is reached (MERGEFEED_SKIPS)"
+)
+_DRAIN_EXHAUSTED_UNBOUND = (
+    "skipped in every context: the fixture asserts the novel `drain_exhausted` "
+    "key (parked upstream), so test_reactive_graph_conformance's pre-flight "
+    "rejects it on the expectation and no step's `expect` is reached "
+    "(MERGEFEED_SKIPS)"
+)
+KNOWN_UNBOUND_BLOCKS: dict[str, str] = {
+    "reactive-graph/exact_fold_paths_stay_exact.json|steps[2].expect": (
+        _MERGE_CELL_UNBOUND
+    ),
+    "reactive-graph/exact_fold_paths_stay_exact.json|steps[3].expect": (
+        _MERGE_CELL_UNBOUND
+    ),
+    "reactive-graph/exact_fold_paths_stay_exact.json|steps[4].expect": (
+        _MERGE_CELL_UNBOUND
+    ),
+    "reactive-graph/feedback_drain_bound_reports_exhaustion.json|steps[1].expect": (
+        _DRAIN_EXHAUSTED_UNBOUND
+    ),
+    "reactive-graph/feedback_drain_bound_reports_exhaustion.json|steps[2].expect": (
+        _DRAIN_EXHAUSTED_UNBOUND
+    ),
+    "reactive-graph/feedback_drain_bound_reports_exhaustion.json|steps[3].expect": (
+        _DRAIN_EXHAUSTED_UNBOUND
+    ),
+    "reactive-graph/merge_cell_acquires_no_dependency_edge.json|steps[1].expect": (
+        _MERGE_CELL_UNBOUND
+    ),
+    "reactive-graph/merge_cell_acquires_no_dependency_edge.json|steps[2].expect": (
+        _MERGE_CELL_UNBOUND
+    ),
+    "reactive-graph/merge_cell_acquires_no_dependency_edge.json|steps[3].expect": (
+        _MERGE_CELL_UNBOUND
+    ),
+    "reactive-graph/merge_cell_acquires_no_dependency_edge.json|steps[4].expect": (
+        _MERGE_CELL_UNBOUND
+    ),
+    "reactive-graph/merge_feed_through_a_formula_coalesces.json|steps[2].expect": (
+        _MERGE_CELL_UNBOUND
+    ),
+    "reactive-graph/merge_feed_through_a_formula_coalesces.json|steps[3].expect": (
+        _MERGE_CELL_UNBOUND
+    ),
+    "reactive-graph/merge_feed_through_a_formula_coalesces.json|steps[4].expect": (
+        _MERGE_CELL_UNBOUND
+    ),
+    "reactive-graph/merge_feed_through_a_formula_coalesces.json|steps[5].expect": (
+        _MERGE_CELL_UNBOUND
+    ),
+    "reactive-graph/merge_feed_through_a_formula_coalesces.json|steps[6].expect": (
+        _MERGE_CELL_UNBOUND
+    ),
+    "reactive-graph/merge_feed_through_a_formula_coalesces.json|steps[7].expect": (
+        _MERGE_CELL_UNBOUND
+    ),
+    "reactive-graph/merge_folds_synchronously_in_batch.json|steps[1].expect": (
+        _MERGE_CELL_UNBOUND
+    ),
+    "reactive-graph/merge_folds_synchronously_in_batch.json|steps[2].expect": (
+        _MERGE_CELL_UNBOUND
+    ),
+    "reactive-graph/merge_folds_synchronously_in_batch.json|steps[3].expect": (
+        _MERGE_CELL_UNBOUND
+    ),
+    "reactive-graph/merge_per_settled_cone_not_per_write.json|steps[1].expect": (
+        _MERGE_CELL_UNBOUND
+    ),
+    "reactive-graph/merge_per_settled_cone_not_per_write.json|steps[2].expect": (
+        _MERGE_CELL_UNBOUND
+    ),
+    "reactive-graph/merge_per_settled_cone_not_per_write.json|steps[3].expect": (
+        _MERGE_CELL_UNBOUND
+    ),
+    "reactive-graph/merge_per_settled_cone_not_per_write.json|steps[4].expect": (
+        _MERGE_CELL_UNBOUND
+    ),
+    "reactive-graph/merge_per_settled_cone_not_per_write.json|steps[5].expect": (
+        _MERGE_CELL_UNBOUND
+    ),
+    "reactive-graph/merge_per_settled_cone_not_per_write.json|steps[6].expect": (
+        _MERGE_CELL_UNBOUND
+    ),
+}
 
 #: Positive-evidence floor (``#lzvacuousrun``). Zero declared blocks means zero
 #: unbound blocks, which reports OK having compared nothing. Do not lower this to
 #: fix a failure.
 #:
-#: Tracks what the run ACTUALLY inventories, exactly — no margin, no slack. Pinned
-#: 2026-08-09 at 31, re-derived from a full ``make test`` on the commit CI run
-#: 31343738442 was green over (that run opened the same 139/150 fixtures, and the
-#: inventory is a function of the opened fixtures' contents). It had sat at 20,
-#: leaving eleven blocks that could have stopped being inventoried with this rung
-#: still green.
+#: Tracks what the run ACTUALLY inventories, exactly — no margin, no slack.
+#: Re-pinned 2026-08-11 at 578 from a full ``make test`` over the same 139/150
+#: opened fixtures, when the inventory walk widened from ``assertions``-only to
+#: the whole of ``BLOCK_KEYS`` at every depth (#lzunboundblockguard). It had sat
+#: at 31 — the count the narrow walk produced — so 547 blocks could have stopped
+#: being inventoried with this rung still green.
 #:
 #: Do not raise this "by however many blocks a change adds" while leaving an old
 #: margin in place — that convention is what let the sibling bindings' floors rot
 #: to 40 replays behind reality (#lzscenariofloordrift). ``conftest`` prints an
 #: ``assertion-block inventory OK`` line carrying the live count, so re-pin this
 #: from a completed CI log rather than guessing.
-MIN_DECLARED_BLOCKS = 31
+MIN_DECLARED_BLOCKS = 578
 
 #: digest -> {"fixture|where"} for every block an opened fixture carried.
 _DECLARED_BLOCKS: dict[str, set[str]] = {}
+#: "fixture|where" -> digest, for the excuse ledger's stale/rotted directions.
+_DECLARED_SITES: dict[str, str] = {}
+#: Fixtures the inventory actually parsed. An excuse for a fixture this run never
+#: opened is neither stale nor rotted — it is simply out of scope, and reporting
+#: it would turn `pytest -k` into a wall of noise.
+_DECLARED_FIXTURES: set[str] = set()
 #: digests a runner handed to a tracker.
 _BOUND_BLOCKS: set[str] = set()
 
@@ -373,11 +506,19 @@ def fnv1a64_hex(data: bytes) -> str:
 
 
 def record_declared_blocks(fixture: str, text: str) -> None:
-    """Inventory every ``assertions`` block a freshly read fixture carries.
+    """Inventory every assertion-bearing block a freshly read fixture carries.
 
-    Top-level plus any carried per-frame, per-scenario or per-reject. Parsing the
-    bytes rather than asking the runner is the whole point: a block the runner
-    never looks at is exactly the one this rung exists to find.
+    Every name in :data:`BLOCK_KEYS`, at every depth, walked exactly the way
+    :func:`instrument` walks the same document — including the ``name``-preferring
+    list labels, so the two sides spell a site identically and an excuse written
+    against a reported label matches. Parsing the bytes rather than asking the
+    runner is the whole point: a block the runner never looks at is exactly the
+    one this rung exists to find, and it is invisible to every rung above.
+
+    A block is emitted and NOT descended into, which is what ``instrument`` does
+    (it wraps the block and stops). Descending would inventory a fixture's
+    ``expect`` nested inside its own ``assertions`` as a second, separately
+    bindable site that no runner can bind without unwrapping the tracker.
     """
     try:
         doc = json.loads(text)
@@ -385,22 +526,31 @@ def record_declared_blocks(fixture: str, text: str) -> None:
         return
     if not isinstance(doc, dict):
         return
+    _DECLARED_FIXTURES.add(fixture)
 
-    def declare(where: str, block: Any) -> None:
-        if not isinstance(block, dict):
-            return
+    def declare(where: str, block: Mapping[str, Any]) -> None:
         digest = block_digest(block)
-        if digest:
-            _DECLARED_BLOCKS.setdefault(digest, set()).add(f"{fixture}|{where}")
+        if not digest:
+            return
+        site = f"{fixture}|{where}"
+        _DECLARED_BLOCKS.setdefault(digest, set()).add(site)
+        _DECLARED_SITES[site] = digest
 
-    declare("assertions", doc.get("assertions"))
-    for container in ("frames", "scenarios", "rejects"):
-        items = doc.get(container)
-        if not isinstance(items, list):
-            continue
-        for index, item in enumerate(items):
-            if isinstance(item, dict):
-                declare(f"{container}[{index}].assertions", item.get("assertions"))
+    def walk(node: Any, path: str) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                child = f"{path}.{key}" if path else key
+                if key in BLOCK_KEYS and isinstance(value, dict):
+                    declare(child, value)
+                    continue
+                walk(value, child)
+        elif isinstance(node, list):
+            for index, value in enumerate(node):
+                label = value.get("name") if isinstance(value, dict) else None
+                tag = label if isinstance(label, str) else str(index)
+                walk(value, f"{path}[{tag}]")
+
+    walk(doc, "")
 
 
 def record_block_bind(data: Mapping[str, Any]) -> None:
@@ -419,6 +569,8 @@ def declared_block_count() -> int:
 def reset_blocks() -> None:
     """Drop the bind ledger (tests of the guard itself)."""
     _DECLARED_BLOCKS.clear()
+    _DECLARED_SITES.clear()
+    _DECLARED_FIXTURES.clear()
     _BOUND_BLOCKS.clear()
 
 
@@ -440,6 +592,27 @@ def block_bind_failures(*, enforce_floor: bool = False) -> list[str]:
             lines.append(
                 f"{site}: KNOWN_UNBOUND_BLOCKS entry has no reason. An excuse with "
                 f"no reason is an unexplained gap wearing a green badge."
+            )
+        fixture = site.split("|", 1)[0]
+        if fixture not in _DECLARED_FIXTURES:
+            # This run never opened the fixture, so the entry is out of scope
+            # rather than wrong. Reporting it would make `pytest -k` unusable.
+            continue
+        digest = _DECLARED_SITES.get(site)
+        if digest is None:
+            lines.append(
+                f"{site}: KNOWN_UNBOUND_BLOCKS names a block the OPENED fixture "
+                f"does not carry. The excuse has rotted — the corpus moved, "
+                f"renamed or dropped the block and the exemption outlived it. "
+                f"Delete the entry, or re-point it at the block's new site."
+            )
+            continue
+        if digest in _BOUND_BLOCKS:
+            lines.append(
+                f"{site}: KNOWN_UNBOUND_BLOCKS excuses a block a runner DOES "
+                f"bind. A stale excuse is worse than none: it exempts the block "
+                f"from this rung for as long as it sits there, so the next time "
+                f"the binding really lapses nothing reports it. Delete the entry."
             )
 
     unbound: list[str] = []
@@ -889,6 +1062,249 @@ def assert_key(
     return want
 
 
+# ---------------------------------------------------------------------------
+# The predicate that never LOOKED (#lzunboundblockguard)
+# ---------------------------------------------------------------------------
+#
+# `assert_key` compares by construction: the fixture's value is one operand of
+# the `==`, so a key it marks asserted really did reach a comparison.
+# `assert_key_with` hands the value to a callback and marks the key asserted on
+# the strength of the callback's verdict — and a callback that ignores its
+# argument entirely books a satisfied assertion having compared nothing. lazily-cs
+# shipped the live instance: an `Assert.All` over the fixture's own array that
+# asserted a property of an ENUM and never touched the replay, vacuously true on
+# an empty array and still marked SATISFIED.
+#
+# So the value handed to the callback is a PROXY that records whether anything
+# read it. Nothing read it => nothing was compared => the key is not asserted.
+#
+# The proxies subclass the built-in they stand in for rather than wrapping it
+# behind an ABC, so `isinstance(want, list)` and `json.dumps(want)` keep working
+# at the call sites and the guard cannot break a predicate that was doing its job.
+
+
+class _ReadLedger:
+    """One flag, shared by every proxy handed to a single predicate call."""
+
+    __slots__ = ("read",)
+
+    def __init__(self) -> None:
+        self.read = False
+
+
+class _RecordingList(list):  # type: ignore[type-arg]
+    """A ``list`` that books a read on every access a predicate can make."""
+
+    def __init__(self, value: Any, ledger: _ReadLedger) -> None:
+        super().__init__(value)
+        self._ledger = ledger
+
+    def _touch(self) -> None:
+        self._ledger.read = True
+
+    def __getitem__(self, index: Any) -> Any:
+        self._touch()
+        return super().__getitem__(index)
+
+    def __iter__(self) -> Any:
+        self._touch()
+        return super().__iter__()
+
+    def __reversed__(self) -> Any:
+        self._touch()
+        return super().__reversed__()
+
+    def __len__(self) -> int:
+        self._touch()
+        return super().__len__()
+
+    def __contains__(self, item: object) -> bool:
+        self._touch()
+        return super().__contains__(item)
+
+    def __eq__(self, other: object) -> bool:
+        self._touch()
+        return list(self) == other
+
+    def __ne__(self, other: object) -> bool:
+        return not self.__eq__(other)
+
+    __hash__ = None  # type: ignore[assignment]
+
+    def index(self, *args: Any, **kwargs: Any) -> int:
+        self._touch()
+        return super().index(*args, **kwargs)
+
+    def count(self, value: Any) -> int:
+        self._touch()
+        return super().count(value)
+
+
+class _RecordingDict(dict):  # type: ignore[type-arg]
+    """A ``dict`` that books a read on every access a predicate can make."""
+
+    def __init__(self, value: Any, ledger: _ReadLedger) -> None:
+        super().__init__(value)
+        self._ledger = ledger
+
+    def _touch(self) -> None:
+        self._ledger.read = True
+
+    def __getitem__(self, key: Any) -> Any:
+        self._touch()
+        return super().__getitem__(key)
+
+    def get(self, key: Any, default: Any = None) -> Any:
+        self._touch()
+        return super().get(key, default)
+
+    def __contains__(self, key: object) -> bool:
+        self._touch()
+        return super().__contains__(key)
+
+    def __iter__(self) -> Any:
+        self._touch()
+        return super().__iter__()
+
+    def __len__(self) -> int:
+        self._touch()
+        return super().__len__()
+
+    def keys(self) -> Any:
+        self._touch()
+        return super().keys()
+
+    def items(self) -> Any:
+        self._touch()
+        return super().items()
+
+    def values(self) -> Any:
+        self._touch()
+        return super().values()
+
+    def __eq__(self, other: object) -> bool:
+        self._touch()
+        return dict(self) == other
+
+    def __ne__(self, other: object) -> bool:
+        return not self.__eq__(other)
+
+    __hash__ = None  # type: ignore[assignment]
+
+
+#: Every dunder a numeric predicate can reach the value through. Generated rather
+#: than hand-written: a slot Python looks up on the TYPE is invisible to
+#: ``__getattribute__``, so each one has to exist on the class, and a
+#: hand-maintained list of thirty is a list that goes out of date.
+_NUMERIC_DUNDERS = [
+    "__eq__",
+    "__ne__",
+    "__lt__",
+    "__le__",
+    "__gt__",
+    "__ge__",
+    "__bool__",
+    "__index__",
+    "__int__",
+    "__float__",
+    "__round__",
+    "__trunc__",
+    "__hash__",
+    "__str__",
+    "__repr__",
+    "__format__",
+    "__add__",
+    "__radd__",
+    "__sub__",
+    "__rsub__",
+    "__mul__",
+    "__rmul__",
+    "__truediv__",
+    "__rtruediv__",
+    "__floordiv__",
+    "__rfloordiv__",
+    "__mod__",
+    "__rmod__",
+    "__pow__",
+    "__rpow__",
+    "__neg__",
+    "__pos__",
+    "__abs__",
+    "__divmod__",
+    "__rdivmod__",
+]
+
+
+def _record_numeric(cls: type, base: type) -> type:
+    for name in _NUMERIC_DUNDERS:
+        original = getattr(base, name, None)
+        if original is None:
+            continue
+
+        def method(self: Any, *args: Any, _original: Any = original) -> Any:
+            self._ledger.read = True
+            return _original(self, *args)
+
+        method.__name__ = name
+        setattr(cls, name, method)
+    return cls
+
+
+class _RecordingInt(int):
+    def __new__(cls, value: Any, ledger: _ReadLedger) -> _RecordingInt:
+        self = super().__new__(cls, value)
+        self._ledger = ledger
+        return self
+
+
+class _RecordingFloat(float):
+    def __new__(cls, value: Any, ledger: _ReadLedger) -> _RecordingFloat:
+        self = super().__new__(cls, value)
+        self._ledger = ledger
+        return self
+
+
+_record_numeric(_RecordingInt, int)
+_record_numeric(_RecordingFloat, float)
+
+
+#: Value types this guard cannot prove a predicate read, and why. Named rather
+#: than left implicit: an uncovered case nobody wrote down is the silent skip one
+#: level up.
+#:
+#: * ``str`` / ``bytes`` — a predicate reaches them as an ARGUMENT to a C string
+#:   method (``actual.startswith(want)``, ``re.match(pattern, want)``), which
+#:   consumes the object through the buffer/unicode API and calls no dunder on
+#:   it. A ``str`` subclass would therefore report "never read" for predicates
+#:   that were doing exactly the right thing.
+#: * ``bool`` / ``NoneType`` — not subclassable, and any opaque box for them
+#:   breaks the ``is True`` / ``is None`` identity checks a predicate may make.
+#:   ``assert_key`` is the right entry point for a two-valued fixture key anyway.
+#:
+#: A value of one of these types is passed through unproxied and the key is
+#: marked asserted on the predicate's verdict alone, exactly as before.
+UNPROXYABLE_VALUE_TYPES: tuple[type, ...] = (str, bytes, bool, type(None))
+
+
+def _recording_value(value: Any, ledger: _ReadLedger) -> tuple[Any, bool]:
+    """Return ``(what to hand the predicate, whether reads are observable)``."""
+    if isinstance(value, TrackedBlock):
+        # Already a recorder with a ledger of its own; adding a second layer
+        # would hide the child block's unconsumed-key verdict behind this one.
+        return value, False
+    if isinstance(value, UNPROXYABLE_VALUE_TYPES):
+        return value, False
+    if isinstance(value, dict):
+        return _RecordingDict(value, ledger), True
+    if isinstance(value, list):
+        return _RecordingList(value, ledger), True
+    if isinstance(value, int):
+        return _RecordingInt(value, ledger), True
+    if isinstance(value, float):
+        return _RecordingFloat(value, ledger), True
+    return value, False
+
+
 def assert_key_with(
     block: TrackedBlock,
     key: str,
@@ -900,14 +1316,36 @@ def assert_key_with(
     For comparisons that are not equality — a tolerance, a set containment, a
     regex, a structural walk. ``check`` may assert internally (returning ``None``)
     or return a truthy/falsy verdict, which is then asserted.
+
+    ``check`` receives a RECORDING view of the fixture value, and a callback that
+    never reads it fails (#lzunboundblockguard): marking a key asserted on the
+    strength of a verdict the fixture's own value never entered is the same
+    silent skip as never reading the key at all, one level in. See
+    :data:`UNPROXYABLE_VALUE_TYPES` for the value types this cannot prove.
+
+    The returned value is the RAW one, never the proxy: callers routinely keep it
+    for a later comparison, and a proxy escaping into the ledger would book reads
+    long after this call decided.
     """
     want = block[key]
-    verdict = check(want)
+    ledger = _ReadLedger()
+    observed, observable = _recording_value(want, ledger)
+    verdict = check(observed)
+    site = f" ({where})" if where else ""
     if verdict is not None:
-        site = f" ({where})" if where else ""
         assert verdict, (
             f"{block.fixture} [{block.block}] {key}{site}: predicate rejected "
             f"fixture value {want!r}"
+        )
+    if observable and not ledger.read:
+        raise AssertionError(
+            f"{block.fixture} [{block.block}] {key}{site}: the predicate never "
+            f"READ the fixture value {want!r}, so this call asserted NOTHING "
+            f"about it — and assert_key_with marks the key asserted, which is "
+            f"how a vacuous check books a satisfied obligation "
+            f"(#lzunboundblockguard). Compare the fixture's own value inside "
+            f"`check`, or — if there is genuinely nothing to compare at this "
+            f"call site — excuse_key(block, {key!r}, reason)."
         )
     block.mark_asserted(key)
     return want
