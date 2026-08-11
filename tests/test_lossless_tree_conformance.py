@@ -15,6 +15,7 @@ through ``lossless-tree.json`` — the same checks the Rust
 
 from __future__ import annotations
 
+import itertools
 import json
 
 import pytest
@@ -276,6 +277,46 @@ def test_non_contiguous_delivery_leaves_a_recoverable_hole() -> None:
     b.apply_update(repair)
     assert t.render() == b.render()
     assert t.frontier() == b.frontier()
+
+
+def test_diff_returns_ops_in_canonical_counter_peer_order() -> None:
+    """Diff order is a cross-binding contract the corpus cannot pin itself.
+
+    ``lossless-tree/non_contiguous_anti_entropy.json`` addresses ops
+    POSITIONALLY (``deliver.only: [0, 2]``), so the fixture only means the same
+    thing in every binding while every binding returns the same order. The
+    corpus cannot catch a broken sort: measured in lazily-zig
+    (commit e8a2a28), replacing the sort with a reverse — or deleting it —
+    left the entire suite green, because either way the two indices select the
+    same SET and ``apply_update`` is order-tolerant by design. Only a direct
+    assertion pins it (``#lzdifforderallbindings``).
+    """
+    a = LosslessTreeCrdt(1)
+    para = a.create_node(ROOT, None, SeedElement("para"))
+    base = a.create_node(para, None, SeedLeaf(LeafKind.TRIVIA, "0"))
+
+    b = a.fork(2)
+
+    # a runs ahead to counter 4 while b's single op stays at counter 3, so b's
+    # op arrives LAST in a's log yet sorts EARLIER than a's own (4, 1). Without
+    # that gap the log would already be canonical and the ordering assertion
+    # below would hold for a reversed diff too — pinning nothing.
+    one = a.create_node(para, base, SeedLeaf(LeafKind.TRIVIA, "1"))
+    a.create_node(para, one, SeedLeaf(LeafKind.TRIVIA, "2"))
+    b.create_node(para, base, SeedLeaf(LeafKind.TRIVIA, "9"))
+    a.apply_update(b.diff(a.frontier()))
+
+    ops = a.diff(TreeVersionFrontier()).ops
+    logged = [op.id for op in a._log]
+
+    # Non-vacuity, asserted EXPLICITLY: log order and canonical order genuinely
+    # differ here. If a future refactor makes them coincide this fails loudly
+    # instead of letting the ordering check below go quietly vacuous.
+    assert len(ops) == len(logged)
+    assert [op.id for op in ops] != logged
+
+    keys = [(op.id.counter, op.id.peer) for op in ops]
+    assert all(prev < curr for prev, curr in itertools.pairwise(keys)), keys
 
 
 # ---------------------------------------------------------------------------
