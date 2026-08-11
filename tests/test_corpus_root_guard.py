@@ -1,16 +1,24 @@
-"""The corpus root has ONE seam, and this test is what makes that true.
+"""Each shared ``lazily-spec`` root has ONE seam, and this test makes that true.
 
-``LAZILY_SPEC_CONFORMANCE_DIR`` repoints every conformance replay at a scratch
-copy of the corpus (never edit the shared ``lazily-spec`` checkout in place --
-nine bindings read it). That only works while every runner resolves fixtures
-through :mod:`tests.conformance_assert` -- ``corpus_dir`` / ``corpus_path`` /
-``corpus_subdir`` / ``corpus_fixture``. A module that spells the default corpus
-root itself is *invisible* to the override, and the failure is silent in the
-worst possible way: a runner reading the unperturbed canonical corpus while
-believing it was redirected is green either way, so a perturbation probe that
-truncates fixtures in the scratch copy reddens nothing and reports the binding
-conformant over bytes nobody perturbed (``#lzcorpusrootguards``,
-``#lzoverrideallrunners``).
+TWO roots are guarded, because there are two overrides:
+
+* ``LAZILY_SPEC_CONFORMANCE_DIR`` repoints every conformance replay at a scratch
+  copy of the CORPUS, honoured by ``corpus_dir`` / ``corpus_path`` /
+  ``corpus_subdir`` / ``corpus_fixture``;
+* ``LAZILY_SPEC_SCHEMAS_DIR`` repoints every schema-validating runner at a
+  scratch copy of the sibling ``schemas`` tree, honoured by ``schemas_dir`` /
+  ``schema_path`` / ``schema_json`` (``#lzspecschemasoverride``).
+
+Never edit the shared ``lazily-spec`` checkout in place -- ten bindings read it,
+and a perturbation there reddens all of them at once. Both overrides only work
+while every runner resolves through :mod:`tests.conformance_assert`. A module
+that spells either default root itself is *invisible* to its override, and the
+failure is silent in the worst possible way: a runner reading the unperturbed
+canonical bytes while believing it was redirected is green either way, so a
+probe that truncates fixtures -- or flips a field in a schema -- in the scratch
+copy reddens nothing and reports the binding conformant over bytes nobody
+perturbed (``#lzcorpusrootguards``, ``#lzoverrideallrunners``,
+``#lzspecschemasoverride``).
 
 That is not hypothetical. lazily-zig had 14 such sites across 12 areas, so the
 override moved 2 runners of 14: truncating 14 fixtures reddened 0 tests before
@@ -29,9 +37,16 @@ What it catches, and why the second form matters:
   for any of those segments. lazily-go's and lazily-js's guards were both
   single-literal greps, and both were proven evadable by exactly this shape.
 
-Adjacency of the two segments is the whole test, which is why the three
-legitimate ``parents[2] / "lazily-spec" / "schemas"`` sites do not trip it: the
-schemas tree is not the corpus and is not overridden.
+Adjacency of the two segments is the whole test: ``lazily-spec`` followed by
+``conformance`` names the corpus, ``lazily-spec`` followed by ``schemas`` names
+the schemas tree, and ``lazily-spec/docs`` -- which no override moves and which
+nothing validates against -- names neither.
+
+The schemas root was NOT guarded when this module landed, on the reasoning that
+it "is not overridden". That was the defect, not the exemption: the three
+``parents[2] / "lazily-spec" / "schemas"`` sites this guard used to whitelist
+were exactly why perturbing a schema meant dirtying the shared checkout. They
+are violations now.
 
 Comments and docstrings are skipped -- several modules legitimately quote the
 path while explaining it, and the AST gives that for free (comments are dropped
@@ -57,12 +72,24 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 #: Adjacency is what separates the corpus from its sibling ``schemas`` tree.
 CORPUS_SEGMENTS = ("lazily-spec", "conformance")
 
-#: The only files allowed to spell the default corpus root.
+#: The same, for the sibling ``schemas`` tree ``LAZILY_SPEC_SCHEMAS_DIR`` moves.
+SCHEMAS_SEGMENTS = ("lazily-spec", "schemas")
+
+#: Every guarded root, mapped to the seam a runner must resolve through instead.
+GUARDED_ROOTS: dict[tuple[str, str], str] = {
+    CORPUS_SEGMENTS: (
+        "conformance_assert.corpus_path()/corpus_subdir()/corpus_fixture()"
+    ),
+    SCHEMAS_SEGMENTS: "conformance_assert.schema_path()/schema_json()",
+}
+
+#: The only files allowed to spell either default root.
 #:
-#: ``conformance_assert.py`` is the seam itself -- ``corpus_dir()`` is where the
-#: default lives and where the override is honoured (and where it fails closed).
-#: This module is on the list because a guard for a spelling has to contain that
-#: spelling to test itself; every other entry would be a hole.
+#: ``conformance_assert.py`` is the seam itself -- ``corpus_dir()`` and
+#: ``schemas_dir()`` are where the defaults live and where the overrides are
+#: honoured (and where they fail closed). This module is on the list because a
+#: guard for a spelling has to contain that spelling to test itself; every other
+#: entry would be a hole.
 ALLOWED = frozenset(
     {
         "tests/conformance_assert.py",
@@ -99,7 +126,7 @@ class GuardError(RuntimeError):
 
 
 class Violation:
-    """One source site that spells the default corpus root."""
+    """One source site that spells a guarded default root."""
 
     def __init__(self, path: str, line: int, detail: str) -> None:
         self.path = path
@@ -176,13 +203,21 @@ def _segments(node: ast.AST, consts: dict[str, str]) -> list[str | None]:
     return [None]
 
 
-def _spells_corpus_root(segments: list[str | None]) -> bool:
-    """True when the corpus segments appear adjacently, in order."""
-    first, second = CORPUS_SEGMENTS
+def _spells_root(segments: list[str | None], root: tuple[str, str]) -> bool:
+    """True when ``root``'s segments appear adjacently, in order."""
+    first, second = root
     for index in range(len(segments) - 1):
         if segments[index] == first and segments[index + 1] == second:
             return True
     return False
+
+
+def _root_spelled(segments: list[str | None]) -> tuple[str, str] | None:
+    """The guarded root this expression spells, or ``None``."""
+    for root in GUARDED_ROOTS:
+        if _spells_root(segments, root):
+            return root
+    return None
 
 
 def _module_constants(tree: ast.Module) -> dict[str, str]:
@@ -225,7 +260,7 @@ def _docstring_ids(tree: ast.Module) -> set[int]:
 
 
 def violations_in_source(source: str, label: str) -> list[Violation]:
-    """Every site in one module that spells the default corpus root."""
+    """Every site in one module that spells a guarded default root."""
     tree = ast.parse(source, filename=label)
     consts = _module_constants(tree)
     skip = _docstring_ids(tree)
@@ -240,17 +275,18 @@ def violations_in_source(source: str, label: str) -> list[Violation]:
             # An assignment TARGET is not a path expression; the name being
             # bound resolves to the same literal and would double-report.
             return
-        if isinstance(node, ast.expr) and _spells_corpus_root(_segments(node, consts)):
-            found.append(
-                Violation(
-                    label,
-                    getattr(node, "lineno", 0),
-                    "spells the default corpus root "
-                    f"({'/'.join(CORPUS_SEGMENTS)}) instead of resolving it "
-                    "through conformance_assert.corpus_path()",
+        if isinstance(node, ast.expr):
+            root = _root_spelled(_segments(node, consts))
+            if root is not None:
+                found.append(
+                    Violation(
+                        label,
+                        getattr(node, "lineno", 0),
+                        f"spells the default {'/'.join(root)} root instead of "
+                        f"resolving it through {GUARDED_ROOTS[root]}",
+                    )
                 )
-            )
-            return  # outermost site only; the parts of it are the same finding
+                return  # outermost site only; its parts are the same finding
         for child in ast.iter_child_nodes(node):
             visit(child)
 
@@ -299,7 +335,7 @@ def scan_tree(root: Path, allowed: frozenset[str] = ALLOWED) -> tuple[int, list[
         )
     if examined == 0:
         raise GuardError(
-            f"corpus-root guard examined ZERO Python files under {root}. "
+            f"spec-root guard examined ZERO Python files under {root}. "
             f"A scan that walks nothing and reports OK is the vacuous green this "
             f"guard exists to prevent, so this is a failure rather than a pass "
             f"(#lzcorpusrootguards)."
@@ -307,19 +343,20 @@ def scan_tree(root: Path, allowed: frozenset[str] = ALLOWED) -> tuple[int, list[
     return examined, findings
 
 
-def test_no_source_outside_the_seam_spells_the_corpus_root() -> None:
+def test_no_source_outside_the_seam_spells_a_guarded_root() -> None:
     examined, findings = scan_tree(REPO_ROOT)
     assert examined >= MIN_FILES_EXAMINED, (
-        f"corpus-root guard examined only {examined} Python files under "
+        f"spec-root guard examined only {examined} Python files under "
         f"{REPO_ROOT} (expected at least {MIN_FILES_EXAMINED}). The scan lost "
         f"its root; a green verdict from here would be vacuous."
     )
     assert not findings, (
-        "these sources compute the default corpus root themselves, so "
-        "LAZILY_SPEC_CONFORMANCE_DIR does not move them and a perturbation "
-        "probe would replay unperturbed canonical bytes and report green "
-        "(#lzcorpusrootguards). Resolve fixtures through "
-        "conformance_assert.corpus_path()/corpus_subdir()/corpus_fixture() "
+        "these sources compute a shared lazily-spec root themselves, so "
+        "LAZILY_SPEC_CONFORMANCE_DIR / LAZILY_SPEC_SCHEMAS_DIR do not move them "
+        "and a perturbation probe would read unperturbed canonical bytes and "
+        "report green (#lzcorpusrootguards, #lzspecschemasoverride). Resolve "
+        "through conformance_assert.corpus_path()/corpus_subdir()/"
+        "corpus_fixture() or conformance_assert.schema_path()/schema_json() "
         "instead:\n  " + "\n  ".join(findings)
     )
 
@@ -331,27 +368,31 @@ def test_the_scan_reached_the_seam_itself() -> None:
     }
     for expected in ALLOWED:
         assert expected in examined, (
-            f"{expected} was not examined by the corpus-root scan; the walk is "
+            f"{expected} was not examined by the spec-root scan; the walk is "
             f"not looking at this repo."
         )
 
 
 def test_the_detector_fires_on_the_real_seam() -> None:
-    """The live detector, run against the one file that really spells the root.
+    """The live detector, run against the one file that really spells the roots.
 
     Without this the suite could pass with a detector that matches nothing at
     all -- the allowlist would hide it. ``conformance_assert.py`` is known to
-    contain the default, so it must come back as a finding when it is not
-    excused.
+    contain BOTH defaults, so both must come back as findings when it is not
+    excused. Asserting per-root rather than "findings is non-empty" is what
+    stops the corpus half from vouching for the schemas half.
     """
     seam = REPO_ROOT / "tests" / "conformance_assert.py"
     findings = violations_in_source(
         seam.read_text(encoding="utf-8"), "tests/conformance_assert.py"
     )
-    assert findings, (
-        "the detector found nothing in the seam that defines the default corpus "
-        "root -- it is matching nothing, and every green above is vacuous."
-    )
+    for root in GUARDED_ROOTS:
+        spelling = "/".join(root)
+        assert any(spelling in finding.detail for finding in findings), (
+            f"the detector found no {spelling} site in the seam that defines "
+            f"that default -- it is matching nothing for this root, and every "
+            f"green above is vacuous for it. Findings were: {findings}"
+        )
 
 
 def test_detects_the_single_literal_form() -> None:
@@ -398,11 +439,33 @@ def test_ignores_comments_and_docstrings(source: str) -> None:
     [
         'S = Path(__file__).resolve().parents[2] / "lazily-spec" / "schemas"\n',
         'S = os.path.join("..", "lazily-spec", "schemas", "defs.json")\n',
-        'S = "../lazily-spec/docs/state-charts.md"\n',
+        'S = "../lazily-spec/schemas"\n',
+        'SPEC = "lazily-spec"\nS = ROOT / SPEC / "schemas" / "defs.json"\n',
+        'S = f"{ROOT}/lazily-spec/schemas/message-passing.json"\n',
     ],
 )
-def test_ignores_the_schemas_and_docs_trees(source: str) -> None:
-    """Not the corpus, not overridden -- and the three real sites must stay clean."""
+def test_detects_the_schemas_root(source: str) -> None:
+    """The exact three shapes this repo carried before #lzspecschemasoverride.
+
+    They were WHITELISTED here on the reasoning that the schemas tree "is not
+    overridden". It is now, so computing it outside the seam is invisible to
+    LAZILY_SPEC_SCHEMAS_DIR in precisely the way the corpus sites were.
+    """
+    findings = violations_in_source(source, "synthetic.py")
+    assert findings, source
+    assert "lazily-spec/schemas" in findings[0].detail, findings
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        'S = "../lazily-spec/docs/state-charts.md"\n',
+        'S = ROOT / "lazily-spec" / "scripts" / "check-assertion-ordering.py"\n',
+        'S = "lazily-specific/conformance"\n',
+    ],
+)
+def test_ignores_unguarded_lazily_spec_trees(source: str) -> None:
+    """No override moves these, and nothing validates against them."""
     assert violations_in_source(source, "synthetic.py") == []
 
 

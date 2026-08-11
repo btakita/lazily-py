@@ -246,6 +246,7 @@ __all__ = [
     "PROSE_KEYS",
     "SCENARIO_EXCUSES",
     "SCENARIO_LABEL_KEYS",
+    "SCHEMAS_DIR_ENV",
     "TrackedBlock",
     "assert_invalidates",
     "assert_key",
@@ -275,6 +276,10 @@ __all__ = [
     "scenario_id",
     "scenario_view",
     "scenarios",
+    "schema_json",
+    "schema_path",
+    "schemas_dir",
+    "schemas_override",
     "sub_entries",
     "tracked",
     "verify_prose",
@@ -2094,6 +2099,106 @@ def corpus_fixture(name: str, fallback: Path | None = None) -> Path:
     if fallback is not None:
         return fallback
     return path
+
+
+#: The environment variable that repoints every SCHEMA-validating runner at a
+#: scratch copy of ``lazily-spec/schemas``.
+#:
+#: ``CORPUS_DIR_ENV`` moves the conformance CORPUS and nothing else. The sibling
+#: ``schemas`` tree was left resolving to the canonical checkout in every runner
+#: that validates wire output against it, so a probe that needed to perturb a
+#: SCHEMA had nowhere to point but the shared repo — and perturbing that reddens
+#: all ten bindings at once and dirties a tree nine other sessions read
+#: (``#lzspecschemasoverride``). This is the same seam one level down.
+SCHEMAS_DIR_ENV = "LAZILY_SPEC_SCHEMAS_DIR"
+
+#: The schemas root this process resolved, memoised by :func:`schemas_dir`.
+#: Resolution happens ONCE: a run whose schemas root could move halfway through
+#: it would validate early output against one tree and later output against
+#: another, and report a single verdict over two different sets of bytes.
+_SCHEMAS_DIR: Path | None = None
+
+
+def schemas_override() -> str | None:
+    """The explicitly-set schemas override, or ``None`` when unset/empty.
+
+    Callers need the *distinction* for the same reason ``corpus_override`` exists:
+    an override that is set is a probe pointing the suite somewhere on purpose, so
+    every "the file is not there" branch has to become a hard failure under it
+    rather than a skip or a fallback.
+    """
+    value = os.environ.get(SCHEMAS_DIR_ENV)
+    return value if value else None
+
+
+def schemas_dir() -> Path:
+    """Locate the canonical schemas tree, honouring ``LAZILY_SPEC_SCHEMAS_DIR``.
+
+    An override that is set but does not name a readable directory FAILS CLOSED.
+    An override naming a directory that is not there is a BROKEN PROBE, not a
+    reason to skip and not a reason to quietly read the canonical checkout: a run
+    that validates against unperturbed schema bytes while the operator believes it
+    was redirected is green either way (``#lzspecschemasoverride``).
+
+    The resolution is memoised, so every runner in a session reads the same tree.
+    """
+    global _SCHEMAS_DIR
+    if _SCHEMAS_DIR is not None:
+        return _SCHEMAS_DIR
+    override = schemas_override()
+    if override:
+        root = Path(override)
+        if not root.is_dir():
+            raise RuntimeError(
+                f"{SCHEMAS_DIR_ENV}={override!r} does not name a readable directory. "
+                f"The override is set, so this is a hard failure rather than a "
+                f"fallback to the sibling checkout: a run that quietly validates "
+                f"against the canonical schemas while the operator believes it was "
+                f"redirected reports green over bytes nobody perturbed "
+                f"(#lzspecschemasoverride)."
+            )
+    else:
+        root = Path(__file__).resolve().parents[2] / "lazily-spec" / "schemas"
+    _SCHEMAS_DIR = root
+    return root
+
+
+def _reset_schemas_dir() -> None:
+    """Drop the memoised schemas root. For this repo's OWN guard tests only.
+
+    A runner that calls this has re-opened exactly the hole :func:`schemas_dir`
+    memoises shut.
+    """
+    global _SCHEMAS_DIR
+    _SCHEMAS_DIR = None
+
+
+def schema_path(name: str) -> Path:
+    """The path a runner should read the schema file ``name`` from.
+
+    The single seam every schema-validating runner joins against. No test module
+    computes ``../lazily-spec/schemas`` itself: a module that does is invisible to
+    the override, and the suite ends up validating against a different tree than
+    the one the probe perturbed. Enforced by ``tests/test_corpus_root_guard.py``.
+
+    Under an explicit override a missing file is a hard error. With the override
+    unset the path is returned as-is, so a checkout without the ``lazily-spec``
+    sibling behaves exactly as it did before this seam existed.
+    """
+    path = schemas_dir() / name
+    if not path.is_file() and schemas_override() is not None:
+        raise AssertionError(
+            f"{SCHEMAS_DIR_ENV} is set, but the schemas copy has no {name!r} "
+            f"(looked at {path}). Falling back to the canonical checkout here "
+            f"would validate against unperturbed bytes and report green "
+            f"(#lzspecschemasoverride)."
+        )
+    return path
+
+
+def schema_json(name: str) -> Any:
+    """The parsed schema ``name``, read through :func:`schema_path`."""
+    return json.loads(schema_path(name).read_text(encoding="utf-8"))
 
 
 def _disk_scenarios(path: Path) -> tuple[list[str], list[str]] | None:

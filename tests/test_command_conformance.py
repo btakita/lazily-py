@@ -11,13 +11,13 @@ the receipt, generation guards, idempotency, cancel-before-terminal-only,
 terminal-conflict-fails-closed, and reconnect equivalence.
 
 A wire-schema compliance test round-trips every ``CommandMessage`` variant
-through ``message-passing.json``.
+through ``message-passing.json``, read through the ``LAZILY_SPEC_SCHEMAS_DIR``
+seam (``#lzspecschemasoverride``).
 """
 
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 from conformance_assert import (
@@ -26,6 +26,7 @@ from conformance_assert import (
     assert_key_with,
     corpus_subdir,
     instrument,
+    schema_json,
 )
 from conformance_assert import (
     scenarios as replay_scenarios,
@@ -296,16 +297,10 @@ from referencing import Registry  # noqa: E402
 from referencing.jsonschema import DRAFT202012  # noqa: E402
 
 
-_SPEC_SCHEMAS = Path(__file__).resolve().parents[2] / "lazily-spec" / "schemas"
-
-
 def _registry() -> Registry:
     names = ["defs", "message-passing", "receipts"]
     schemas = {
-        f"https://lazily.dev/schemas/{n}.json": json.loads(
-            (_SPEC_SCHEMAS / f"{n}.json").read_text()
-        )
-        for n in names
+        f"https://lazily.dev/schemas/{n}.json": schema_json(f"{n}.json") for n in names
     }
     resources = [
         (uri, DRAFT202012.create_resource(schema)) for uri, schema in schemas.items()
@@ -316,7 +311,7 @@ def _registry() -> Registry:
 def test_command_plane_wire_validates_schema() -> None:
     """Round-trip every CommandMessage variant through message-passing.json."""
     validator = jsonschema.Draft202012Validator(
-        json.loads((_SPEC_SCHEMAS / "message-passing.json").read_text()),
+        schema_json("message-passing.json"),
         registry=_registry(),
     )
     for name in _FIXTURE_NAMES:

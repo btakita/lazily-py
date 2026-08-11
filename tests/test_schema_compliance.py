@@ -8,18 +8,19 @@ prove lazily-py's ``to_wire()`` output for binding-constructed messages
 (including the NodeKey / CrdtSync surface that the fixtures do not yet cover)
 validates against the normative schemas.
 
-Schemas are read from the sibling ``lazily-spec/schemas`` repo (preferred). When
-the sibling is absent (e.g. this binding is checked out standalone), these tests
-skip — they never fall back to a vendored copy, which would itself be a drift
-hazard.
+Schemas are read through :func:`conformance_assert.schema_json` — the one seam
+``LAZILY_SPEC_SCHEMAS_DIR`` moves (``#lzspecschemasoverride``), so a probe can
+perturb a schema in a scratch copy instead of dirtying the shared checkout every
+other binding reads. They are never read from a vendored copy, which would itself
+be a drift hazard.
 """
 
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
+from conformance_assert import schema_json
 
 
 jsonschema = pytest.importorskip("jsonschema")
@@ -47,16 +48,12 @@ from lazily.ipc import (  # noqa: E402
 )
 
 
-_SPEC_SCHEMAS = Path(__file__).resolve().parents[2] / "lazily-spec" / "schemas"
-
 _SCHEMA_NAMES = ["defs", "snapshot", "delta", "distributed", "receipts"]
 
 
 def _registry() -> Registry:
     schemas = {
-        f"https://lazily.dev/schemas/{name}.json": json.loads(
-            (_SPEC_SCHEMAS / f"{name}.json").read_text()
-        )
+        f"https://lazily.dev/schemas/{name}.json": schema_json(f"{name}.json")
         for name in _SCHEMA_NAMES
     }
     resources = [
@@ -66,7 +63,7 @@ def _registry() -> Registry:
 
 
 def _validator(schema_name: str) -> jsonschema.Draft202012Validator:
-    schema = json.loads((_SPEC_SCHEMAS / f"{schema_name}.json").read_text())
+    schema = schema_json(f"{schema_name}.json")
     return jsonschema.Draft202012Validator(schema, registry=_registry())
 
 

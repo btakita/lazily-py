@@ -9,13 +9,13 @@ deliver / on), and asserts ``render``, ``live_nodes``, and convergence.
 A wire-schema compliance test exercises every M1 op variant through the
 ``lossless-tree-delta.json`` schema, and the ``TreeVersionFrontier`` shape
 through ``lossless-tree.json`` — the same checks the Rust
-``tests/lossless_tree_schema.rs`` makes.
+``tests/lossless_tree_schema.rs`` makes. Both schemas are read through the
+``LAZILY_SPEC_SCHEMAS_DIR`` seam (``#lzspecschemasoverride``).
 """
 
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 from conformance_assert import (
@@ -24,6 +24,7 @@ from conformance_assert import (
     corpus_subdir,
     instrument,
     scenarios,
+    schema_json,
     sub_entries,
 )
 
@@ -287,16 +288,10 @@ from referencing import Registry  # noqa: E402
 from referencing.jsonschema import DRAFT202012  # noqa: E402
 
 
-_SPEC_SCHEMAS = Path(__file__).resolve().parents[2] / "lazily-spec" / "schemas"
-
-
 def _registry() -> Registry:
     names = ["lossless-tree", "lossless-tree-delta"]
     schemas = {
-        f"https://lazily.dev/schemas/{n}.json": json.loads(
-            (_SPEC_SCHEMAS / f"{n}.json").read_text()
-        )
-        for n in names
+        f"https://lazily.dev/schemas/{n}.json": schema_json(f"{n}.json") for n in names
     }
     resources = [
         (uri, DRAFT202012.create_resource(schema)) for uri, schema in schemas.items()
@@ -306,7 +301,7 @@ def _registry() -> Registry:
 
 def test_emitted_tree_update_validates_delta_schema() -> None:
     validator = jsonschema.Draft202012Validator(
-        json.loads((_SPEC_SCHEMAS / "lossless-tree-delta.json").read_text()),
+        schema_json("lossless-tree-delta.json"),
         registry=_registry(),
     )
     t = LosslessTreeCrdt(1)
@@ -323,7 +318,7 @@ def test_emitted_tree_update_validates_delta_schema() -> None:
 
 
 def test_frontier_validates_vocabulary_schema() -> None:
-    vocab = json.loads((_SPEC_SCHEMAS / "lossless-tree.json").read_text())
+    vocab = schema_json("lossless-tree.json")
     frontier_def = {"$ref": "#/$defs/TreeVersionFrontier"}
     validator = jsonschema.Draft202012Validator(
         {"$defs": vocab["$defs"], **frontier_def}
@@ -339,7 +334,7 @@ def test_frontier_validates_vocabulary_schema() -> None:
 
 def test_delta_schema_rejects_base64_frac_and_lowercase_leaf_kind() -> None:
     validator = jsonschema.Draft202012Validator(
-        json.loads((_SPEC_SCHEMAS / "lossless-tree-delta.json").read_text()),
+        schema_json("lossless-tree-delta.json"),
         registry=_registry(),
     )
     good = {
