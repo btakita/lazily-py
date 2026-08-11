@@ -189,7 +189,12 @@ fi
 # leaves `covered` alone, so it does not trip this; only a replay that STOPS
 # running does. The env override exists for bisecting an upstream corpus change,
 # not for making a red run green.
-MIN_FIXTURES="${MIN_FIXTURES:-139}"
+# 2026-08-11: 139 -> 141. lazily-spec 39df4b3 (already on origin/main, so CI's
+# clone has it) added lossless-tree/apply_update_advances_counter.json and
+# lossless-tree/out_of_order_delivery_buffers.json, and this binding now replays
+# both (#lzspecoutoforderfixtures). Corpus 150 -> 152, opened 139 -> 141, held
+# exactly — no margin, per the paragraph above.
+MIN_FIXTURES="${MIN_FIXTURES:-141}"
 if [ "$total" -eq 0 ]; then
   echo "ERROR: the corpus at $SPEC_DIR listed ZERO fixtures." >&2
   echo "       Every check above is vacuously green over an empty population:" >&2

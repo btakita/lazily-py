@@ -115,6 +115,51 @@ def _apply_op(world: _World, on: str, op: dict) -> None:
         raise ValueError(f"unknown op: {kind}")
 
 
+def _deliver(world: _World, d: dict) -> None:
+    """Partial anti-entropy: hand `to` a chosen slice of `from`'s canonical diff.
+
+    The candidate list is the SAME `diff(to.frontier())` a full `sync` computes,
+    sorted by the dotted `(counter, peer)` order `diff` already pins
+    (#lzdifforderallbindings). Both selectors index into that list, 0-based:
+
+      * `only`  — deliver that SUBSET, in canonical order. Which entries arrive,
+                  not in what sequence.
+      * `order` — deliver exactly those entries IN THE LISTED SEQUENCE, as ONE
+                  `apply_update` call (#lzspecoutoforderfixtures). Re-sorting it,
+                  or splitting it across calls, destroys the property the fixture
+                  is testing: an op must arrive BEFORE the op it depends on, in
+                  the same batch, so the dependency buffer is what recovers it.
+                  A batch delivered one op per call would let plain re-delivery
+                  paper over a missing buffer.
+
+    Neither selector is clamped. An index past the end of the diff means the
+    fixture and this runner disagree about what `from` is holding, and silently
+    dropping it would deliver a SHORTER batch that still passes — so it raises.
+    Exactly one selector must be present: defaulting a missing one to "all"
+    would turn a typo'd key into a full sync that quietly converges.
+    """
+    src, dst = d["from"], d["to"]
+    present = [key for key in ("only", "order") if key in d]
+    if len(present) != 1:
+        raise ValueError(
+            f"deliver step must carry exactly one of `only` / `order`; got {present}"
+        )
+    selector = present[0]
+    full = world.replicas[src].diff(world.replicas[dst].frontier())
+    indexes = [int(i) for i in d[selector]]
+    for i in indexes:
+        if not 0 <= i < len(full.ops):
+            raise IndexError(
+                f"deliver {selector}={indexes} indexes op {i}, but the "
+                f"{src}->{dst} diff holds only {len(full.ops)} op(s); an "
+                f"out-of-range index is a disagreement about the diff, not "
+                f"something to clamp"
+            )
+    if selector == "only":
+        indexes = sorted(indexes)
+    world.replicas[dst].apply_update(type(full)(ops=[full.ops[i] for i in indexes]))
+
+
 def _apply_step(world: _World, step: dict) -> None:
     if "fork" in step:
         world.replicas[step["fork"]] = world.replicas["a"].fork(step["peer"])
@@ -123,10 +168,7 @@ def _apply_step(world: _World, step: dict) -> None:
         update = world.replicas[src].diff(world.replicas[dst].frontier())
         world.replicas[dst].apply_update(update)
     elif "deliver" in step:
-        d = step["deliver"]
-        src, dst, only = d["from"], d["to"], d["only"]
-        full = world.replicas[src].diff(world.replicas[dst].frontier())
-        world.replicas[dst].apply_update(type(full)(ops=[full.ops[i] for i in only]))
+        _deliver(world, step["deliver"])
     elif "on" in step:
         _apply_op(world, step["on"], step)
     else:
@@ -206,12 +248,116 @@ _FIXTURE_NAMES = [
     "token_trivia_preservation.json",
     "invalid_source_roundtrip.json",
     "concurrent_conflict_preserves_text.json",
+    # The two apply_update rules no fork -> edit -> sync fixture could see
+    # (lazily-spec 39df4b3, #lzspecoutoforderfixtures): the Lamport counter must
+    # advance past every INGESTED op before the idempotence skip, and an op whose
+    # dependency has not landed must be buffered and retried rather than dropped.
+    "apply_update_advances_counter.json",
+    "out_of_order_delivery_buffers.json",
 ]
 
 
 @pytest.mark.parametrize("name", _FIXTURE_NAMES)
 def test_lossless_tree_conformance(name: str) -> None:
     _run_fixture(name)
+
+
+# ---------------------------------------------------------------------------
+# `deliver` step contract (#lzspecoutoforderfixtures)
+#
+# These gate the RUNNER, not the library. `deliver.order` is the only way the
+# corpus can state "this op arrived before the one it depends on", so a runner
+# that clamps an out-of-range index, re-sorts the sequence, splits the batch, or
+# defaults a missing selector to "everything" replays a DIFFERENT scenario and
+# reports green for it.
+# ---------------------------------------------------------------------------
+
+
+def _two_op_world() -> _World:
+    """`a` holds two ops `b` lacks: create `outer`, then create `inner` inside it."""
+    world = _World()
+    world.replicas["a"] = LosslessTreeCrdt(1)
+    para = world.replicas["a"].create_node(ROOT, None, SeedElement("para"))
+    world.ids["para"] = para
+    world.replicas["b"] = world.replicas["a"].fork(2)
+    outer = world.replicas["a"].create_node(para, None, SeedElement("wrap"))
+    world.replicas["a"].create_node(outer, None, SeedLeaf(LeafKind.RAW, "deep"))
+    return world
+
+
+def _record_batches(monkeypatch: pytest.MonkeyPatch) -> list[list[object]]:
+    """Record every `apply_update` batch. `LosslessTreeCrdt` uses `__slots__`, so
+    the spy goes on the class, not on the instance."""
+    batches: list[list[object]] = []
+    real_apply = LosslessTreeCrdt.apply_update
+
+    def _spy(self, update):
+        batches.append(list(update.ops))
+        real_apply(self, update)
+
+    monkeypatch.setattr(LosslessTreeCrdt, "apply_update", _spy)
+    return batches
+
+
+def test_deliver_order_delivers_the_listed_sequence_in_one_batch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world = _two_op_world()
+    canonical = world.replicas["a"].diff(world.replicas["b"].frontier()).ops
+    assert len(canonical) == 2
+
+    batches = _record_batches(monkeypatch)
+    _deliver(world, {"from": "a", "to": "b", "order": [1, 0]})
+
+    # ONE call, carrying exactly the listed indexes in the listed sequence — the
+    # child's create ahead of its parent's. Re-sorting or splitting this would
+    # hand the library an in-order batch and hide a missing dependency buffer.
+    assert len(batches) == 1
+    assert batches[0] == [canonical[1], canonical[0]]
+    assert world.replicas["b"].render() == "deep"
+
+
+def test_deliver_only_delivers_its_subset_in_canonical_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world = _two_op_world()
+    canonical = world.replicas["a"].diff(world.replicas["b"].frontier()).ops
+
+    batches = _record_batches(monkeypatch)
+    _deliver(world, {"from": "a", "to": "b", "only": [1, 0]})
+
+    assert batches == [[canonical[0], canonical[1]]]
+
+
+def test_deliver_order_rejects_an_out_of_range_index_instead_of_clamping() -> None:
+    world = _two_op_world()
+    with pytest.raises(IndexError, match="out-of-range"):
+        _deliver(world, {"from": "a", "to": "b", "order": [2, 1, 0]})
+    # Nothing was delivered. A clamping runner would have shipped a SHORTER batch
+    # and still converged, so the fixture would pass while replaying two ops
+    # instead of three.
+    assert world.replicas["b"].render() == ""
+
+
+def test_deliver_only_rejects_an_out_of_range_index_instead_of_clamping() -> None:
+    world = _two_op_world()
+    with pytest.raises(IndexError, match="out-of-range"):
+        _deliver(world, {"from": "a", "to": "b", "only": [0, 5]})
+    assert world.replicas["b"].render() == ""
+
+
+@pytest.mark.parametrize(
+    "selectors",
+    [
+        pytest.param({"only": [0], "order": [0]}, id="both"),
+        pytest.param({}, id="neither"),
+    ],
+)
+def test_deliver_requires_exactly_one_selector(selectors: dict) -> None:
+    world = _two_op_world()
+    with pytest.raises(ValueError, match="exactly one of"):
+        _deliver(world, {"from": "a", "to": "b", **selectors})
+    assert world.replicas["b"].render() == ""
 
 
 # ---------------------------------------------------------------------------
