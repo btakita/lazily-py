@@ -584,6 +584,17 @@ def test_crdt_plane_anti_entropy_conformance() -> None:
             assert_key(expect, "order_independent", got == got2, where=name)
 
         def _converged(wants: list[dict], name: str = name, plane: Any = plane) -> None:
+            # Per-element membership only ever adds obligations, never counts
+            # them, so DELETING an entry silently removed one and stayed green
+            # (#lzconvergedlistlength). The declared list must account for every
+            # converged entry the plane produced, or the corpus can shrink its
+            # own expectation.
+            entries = plane.converged()
+            assert len(wants) == len(entries), (
+                f"{name}: expect.converged declares {len(wants)} entries but the "
+                f"plane converged {len(entries)}; a shorter list drops an "
+                f"obligation without failing"
+            )
             for want in wants:
                 matches = [
                     e

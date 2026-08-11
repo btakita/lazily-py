@@ -158,6 +158,20 @@ def _assert_expect(world: _World, expect: dict, label: str) -> None:
         )
 
     def _converged(names: list[str]) -> None:
+        # The comparison is `names[1:]` against `names[0]`, so a ONE-element list
+        # runs zero comparisons and a shortened list quietly drops a replica from
+        # the claim — `["a","b"] -> ["a"]` was green (#lzconvergedlistlength).
+        # The declared set must therefore cover every replica the scenario built:
+        # convergence over a subset is not the claim the fixture is making.
+        assert len(names) >= 2, (
+            f"{label}: converged names {names} — a convergence claim over fewer "
+            f"than two replicas compares nothing"
+        )
+        assert set(names) == set(world.replicas), (
+            f"{label}: converged names {sorted(names)} do not cover every replica "
+            f"the scenario built ({sorted(world.replicas)}); a subset can drop a "
+            f"divergent replica from the claim without failing"
+        )
         first = world.replicas[names[0]].render()
         for name in names[1:]:
             assert world.replicas[name].render() == first, (
