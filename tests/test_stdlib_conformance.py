@@ -30,6 +30,24 @@ def load(name: str) -> dict[str, Any]:
     return instrument(json.loads((SPEC / name).read_text()), name=f"stdlib/{name}")
 
 
+# Assertions actually performed against the corpus, counted at the point of
+# comparison so `assertion_floor` measures the RUN rather than the file
+# (#lzpystdlibfloorsunread).
+_ASSERTIONS_MADE = 0
+
+
+def _assert_expect(actual: Any, step: dict[str, Any]) -> None:
+    """Compare a replayed step against its declared `expect`, and count it."""
+    global _ASSERTIONS_MADE
+    expect = step["expect"]
+    # Count KEYS compared, not steps. `isinstance(expect, dict)` is wrong here:
+    # `scenarios()` hands out tracked views, so an `expect` block is a Mapping
+    # but not a `dict`, and the naive check silently counted 1 per step (14 for
+    # timer.json instead of 29) — which is itself the shape this item is about.
+    _ASSERTIONS_MADE += len(expect) if hasattr(expect, "keys") else 1
+    assert actual == expect
+
+
 def replay_timer(steps: list[dict[str, Any]]) -> None:
     timer: Timer | None = None
     last: dict[str, Any]
@@ -47,7 +65,7 @@ def replay_timer(steps: list[dict[str, Any]]) -> None:
             # `observe` used to be the unnamed `else`, so any op the corpus grows
             # would have been replayed as an observe (#lzscenariobodyskip).
             raise AssertionError(f"unknown timer op {step['op']!r}")
-        assert last == step["expect"]
+        _assert_expect(last, step)
 
 
 def replay_timeout(steps: list[dict[str, Any]]) -> None:
@@ -100,7 +118,7 @@ def replay_timeout(steps: list[dict[str, Any]]) -> None:
         else:
             # `poll` used to be the unnamed `else` (#lzscenariobodyskip).
             raise AssertionError(f"unknown timeout op {step['op']!r}")
-        assert actual == step["expect"]
+        _assert_expect(actual, step)
 
 
 def replay_barrier(steps: list[dict[str, Any]]) -> None:
@@ -142,7 +160,7 @@ def replay_barrier(steps: list[dict[str, Any]]) -> None:
         actual = clean(value)
         if step["op"] == "observe":
             actual["cancellation_calls"] = calls
-        assert actual == step["expect"]
+        _assert_expect(actual, step)
 
 
 def test_stdlib_canonical_corpus() -> None:
@@ -151,14 +169,50 @@ def test_stdlib_canonical_corpus() -> None:
         "stdlib_timeout_v1": replay_timeout,
         "stdlib_revision_barrier_v1": replay_barrier,
     }
+    global _ASSERTIONS_MADE
     for name in ("timer.json", "timeout.json", "revision_barrier.json"):
         fixture = load(name)
         scenarios = {scenario["id"] for scenario in fixture["scenarios"]}
+
+        _ASSERTIONS_MADE = 0
+        replayed = 0
         for scenario in replay_scenarios(fixture):
             runners[fixture["feature"]](scenario["steps"])
+            replayed += 1
+
         for mutation in fixture["mutations"]:
             assert mutation["must_fail"]
             assert set(mutation["must_fail"]) <= scenarios
+
+        # The three floors are REQUIRED by schemas/stdlib-fixture.schema.json and
+        # were read by nothing here — a repo-wide grep found zero references, so
+        # `scenario_floor: 99` against a six-scenario fixture was green
+        # (#lzpystdlibfloorsunread). They are the corpus's own anti-vacuity
+        # budget: the one area whose fixtures carry an explicit "prove you did N
+        # things" contract was the one area where nothing checked it.
+        #
+        # Each is compared against what this RUN did, not against the file:
+        # `replayed` counts scenarios the ledger actually yielded, and
+        # `_ASSERTIONS_MADE` is incremented inside `_assert_expect`, at the
+        # comparison itself. A floor computed from the fixture would be a
+        # tautology.
+        assert replayed >= fixture["scenario_floor"], (
+            f"{name}: replayed {replayed} scenarios, below the declared "
+            f"scenario_floor {fixture['scenario_floor']}"
+        )
+        assert fixture["assertion_floor"] <= _ASSERTIONS_MADE, (
+            f"{name}: made {_ASSERTIONS_MADE} assertions, below the declared "
+            f"assertion_floor {fixture['assertion_floor']}"
+        )
+        # NOTE: this binding does not APPLY the mutations — it checks the ledger
+        # is well-formed and meets its floor. lazily-rs replays each operator
+        # through an independent interpreter and asserts the named scenarios
+        # fail; until that exists here, mutation_floor bounds the ledger's size
+        # and nothing more. Said plainly rather than implied (#lzpystdlibmutants).
+        assert len(fixture["mutations"]) >= fixture["mutation_floor"], (
+            f"{name}: carries {len(fixture['mutations'])} mutations, below the "
+            f"declared mutation_floor {fixture['mutation_floor']}"
+        )
 
 
 def test_async_adapters_are_caller_driven() -> None:
