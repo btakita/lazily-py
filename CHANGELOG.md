@@ -1,7 +1,15 @@
 ## Unreleased
 
+## 0.40.0
+
 ### Added
 
+- `LatestDurableProjectionCore` plus single-threaded, thread-safe, and async
+  reactive shells. The per-key egress authority conflates pending revisions,
+  permits one exact generation/epoch attempt in flight, preserves newer intent
+  across old success or failure, and requeues safely across reconnects. All
+  shells replay the canonical lazily-spec v0.38.0 fixture and follow the
+  corrected lazily-formal v0.38.1 model.
 - The `msgpack` frame codec — the cross-language binary default protocol.md
   § Frame codecs makes MUST-level for every binding (`#lzmsgpackseven`).
   `IpcMessage.encode_msgpack()` / `decode_msgpack()` speak the wire the token

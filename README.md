@@ -276,6 +276,9 @@ from its Lean formal model in [`lazily-formal`](https://github.com/lazily-hub/la
   usage rule) with a pluggable `QueueStorage` backend. Reader-kind invalidation
   (head/len/is_empty/is_full/closed), bounded reactive backpressure via `is_full`,
   and the closure lifecycle (drain / Closed-distinct-from-Empty / idempotent).
+- **`LatestDurableProjectionCore` / `LatestDurableProjection`** — keyed durable
+  egress that converges each sink key to its latest desired epoch, permits one
+  in-flight attempt per key, and generation-fences stale acknowledgements.
 - **`reconcile_ops`** — move-minimized keyed reconciliation (LIS kernel).
 - **`AsyncSlot` / `AsyncEffect`** — the async slot lifecycle with stale-completion
   discard, and cleanup-before-body effect scheduling.
@@ -287,6 +290,37 @@ from its Lean formal model in [`lazily-formal`](https://github.com/lazily-hub/la
 The test suite gates on `lazily-formal`'s `lake build` (every theorem checks)
 and mirrors the named Lean theorems as property tests. See `SPEC.md` for the
 full compliance surface.
+
+## Latest-durable projection — `lazily.latest_durable_projection`
+
+Use `LatestDurableProjection` when the durable side effect is a projection of
+current state (for example, saving the latest document image), rather than a
+command log where every intermediate value must execute. `upsert_desired` keeps
+only the newest pending epoch per key; `claim` allows at most one sink attempt
+per key; `ack_applied` and `fail_retryable` must match that attempt's generation
+and epoch. `reconnect` advances the sink generation and safely requeues claimed
+work, so a stale actor can never clear newer intent.
+
+```python
+from lazily import LatestDurableProjection
+
+projection = LatestDurableProjection[str, str]({}, generation=1)
+projection.upsert_desired("document", epoch=41, value="latest text")
+attempt = projection.claim("document", generation=1).envelope
+assert attempt is not None
+
+# Await the external write in the caller's driver, then acknowledge its exact
+# token. A concurrent epoch 42 remains pending even when epoch 41 succeeds.
+projection.ack_applied(attempt.key, attempt.generation, attempt.epoch)
+```
+
+The graph-agnostic `LatestDurableProjectionCore` and the reactive
+`LatestDurableProjection`, `ThreadSafeLatestDurableProjection`, and
+`AsyncLatestDurableProjection` shells implement the same contract. The async
+shell's transitions are intentionally synchronous; only the external sink
+driver awaits I/O. All three shells replay
+`conformance/egress/latest_durable_projection.json` from `lazily-spec` v0.38.0
+and correspond to the corrected `lazily-formal` v0.38.1 model.
 
 ## Reactive queue — `lazily.queue`
 
